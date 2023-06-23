@@ -323,7 +323,6 @@ static void bgp_peer_remove_bfd(struct peer *p)
 	if (p->bfd_config)
 		bfd_sess_free(&p->bfd_config->session);
 
-  XFREE(MTYPE_BFD_CONFIG, p->bfd_config);
 	XFREE(MTYPE_BFD_CONFIG, p->bfd_config);
 }
 

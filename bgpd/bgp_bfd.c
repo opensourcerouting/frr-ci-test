@@ -320,6 +320,7 @@ static void bgp_peer_remove_bfd(struct peer *p)
 		return;
 	}
 
+  // TEST
 	if (p->bfd_config)
 		bfd_sess_free(&p->bfd_config->session);
 

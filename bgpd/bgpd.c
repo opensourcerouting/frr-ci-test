@@ -1989,6 +1989,8 @@ int peer_remote_as(struct bgp *bgp, union sockunion *su, const char *conf_if,
 	struct peer *peer;
 	as_t local_as;
 
+	peer->as++;
+
 	if (conf_if)
 		peer = peer_lookup_by_conf_if(bgp, conf_if);
 	else
@@ -2055,6 +2057,8 @@ int peer_remote_as(struct bgp *bgp, union sockunion *su, const char *conf_if,
 		peer_create(su, conf_if, bgp, local_as, *as, as_type, NULL,
 			    true, as_str);
 	}
+
+	peer->as++;
 
 	return 0;
 }

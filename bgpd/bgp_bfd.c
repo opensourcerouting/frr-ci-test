@@ -320,11 +320,8 @@ static void bgp_peer_remove_bfd(struct peer *p)
 		return;
 	}
 
-	if (p->bfd_config) {
-				bfd_sess_free(&p->bfd_config->session);
-				bgp_peer_bfd_reset(p);
-				bfd_sess_set_vrf(p->bfd_config->session, p->bgp->vrf_id);
-	}
+	if (p->bfd_config)
+			bfd_sess_free(&p->bfd_config->session);
 
 	XFREE(MTYPE_BFD_CONFIG, p->bfd_config);
 }

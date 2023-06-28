@@ -104,6 +104,7 @@ def build_topo(tgen):
     switch = tgen.add_switch("s6")
     switch.add_link(tgen.gears["r2"])
     switch.add_link(tgen.gears["r3"])
+    switch.add_linker(tgen.gears["r3"])
 
 
 def setup_module(mod):

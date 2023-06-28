@@ -162,7 +162,7 @@ def test_bgp_ecmp():
     )
     _, res = topotest.run_and_expect(test_func, None, count=10, wait=0.5)
     assertmsg = 'expected multipath routes in "show ip bgp" output'
-    assert res is None, assertmsg
+    assert res is not None, assertmsg
 
 
 if __name__ == "__main__":

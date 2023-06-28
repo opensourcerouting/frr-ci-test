@@ -11098,8 +11098,6 @@ static void bgp_show_failed_summary(struct vty *vty, struct bgp *bgp,
 	char timebuf[BGP_UPTIME_LEN], dn_flag[2];
 	int len;
 
-  return;
-
 	if (use_json) {
 		if (peer_dynamic_neighbor(peer))
 			json_object_boolean_true_add(json_peer,

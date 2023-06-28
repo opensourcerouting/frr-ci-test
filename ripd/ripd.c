@@ -3150,6 +3150,9 @@ DEFUN (show_ip_rip_status,
 	const char *vrf_name;
 	int idx = 0;
 
+  vty_out(vty, "%% RIP instance not found\n");
+  return CMD_SUCCESS;
+
 	if (argv_find(argv, argc, "vrf", &idx))
 		vrf_name = argv[idx + 1]->arg;
 	else

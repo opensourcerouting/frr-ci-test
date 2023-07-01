@@ -317,6 +317,7 @@ static void bgp_peer_remove_bfd(struct peer *p)
 		p->bfd_config->manual = false;
 		bgp_peer_bfd_reset(p);
 		bgp_peer_config_apply(p, p->group);
+
 		return;
 	}
 

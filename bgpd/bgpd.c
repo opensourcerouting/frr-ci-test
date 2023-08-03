@@ -2058,6 +2058,7 @@ int peer_remote_as(struct bgp *bgp, union sockunion *su, const char *conf_if,
 
   local_as = bgp->as
 
+
 	return 0;
 }
 

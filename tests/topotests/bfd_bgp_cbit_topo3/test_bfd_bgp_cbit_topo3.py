@@ -84,6 +84,8 @@ def test_protocols_convergence():
     # Check IPv6 routing tables.
     logger.info("Checking IPv6 routes for convergence")
     for router in tgen.routers().values():
+        cmd = 'vtysh -c "debug bfd zebra" -c "debug bfd peers"'
+        router.cmd(cmd)
         if router.name == "r2":
             continue
         json_file = "{}/{}/ipv6_routes.json".format(CWD, router.name)

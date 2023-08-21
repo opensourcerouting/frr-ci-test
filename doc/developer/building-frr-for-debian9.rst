@@ -108,6 +108,7 @@ Troubleshooting
 Shared library error
 ^^^^^^^^^^^^^^^^^^^^
 
+
 If you try and start any of the frrouting daemons you may see the below
 error due to the frrouting shared library directory not being found:
 

@@ -98,7 +98,6 @@ def test_protocols_convergence():
         )
         _, result = topotest.run_and_expect(test_func, None, count=40, wait=0.5)
         assertmsg = '"{}" JSON output mismatches'.format(router.name)
-
         assert result is None, assertmsg
 
 

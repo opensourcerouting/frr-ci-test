@@ -100,6 +100,7 @@ def test_protocols_convergence():
         assertmsg = '"{}" JSON output mismatches'.format(router.name)
         assert result is None, assertmsg
 
+
 def test_bfd_connection():
     "Assert that the BFD peers can find themselves."
     tgen = get_topogen()

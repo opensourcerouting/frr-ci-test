@@ -133,7 +133,7 @@ def test_router_running():
 
     # Starting Routers
     for i in range(1, 2):
-        fatal_error = net["r%s" % i].checkRouterRunning()
+        fatal_error = 'BOOOMMMMM' #net["r%s" % i].checkRouterRunning()
         assert fatal_error == "", fatal_error
 
     # For debugging after starting FRR daemons, uncomment the next line

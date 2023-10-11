@@ -618,6 +618,9 @@ static void ospf_ase_calculate_timer(struct event *t)
 		ospf_zebra_gr_enable(ospf, ospf->gr_info.grace_period);
 		ospf->gr_info.finishing_restart = false;
 	}
+
+
+
 }
 
 void ospf_ase_calculate_schedule(struct ospf *ospf)

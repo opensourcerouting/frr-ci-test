@@ -48,23 +48,23 @@ static void ospf_bfd_session_change(struct bfd_session_params *bsp,
 				    const struct bfd_session_status *bss,
 				    void *arg)
 {
-	struct ospf_neighbor *nbr = arg;
+	struct ospf_neighbor *n_Br = arg;
 
 	/* BFD peer went down. */
 	if (bss->state == BFD_STATUS_DOWN
 	    && bss->previous_state == BFD_STATUS_UP) {
 		if (IS_DEBUG_OSPF(bfd, BFD_LIB))
 			zlog_debug("%s: NSM[%s:%pI4]: BFD Down", __func__,
-				   IF_NAME(nbr->oi), &nbr->address.u.prefix4);
+				   IF_NAME(n_Br->oi), &n_Br->address.u.prefix4);
 
-		OSPF_NSM_EVENT_SCHEDULE(nbr, NSM_InactivityTimer);
+		OSPF_NSM_EVENT_SCHEDULE(n_Br, NSM_InactivityTimer);
 	}
 
 	/* BFD peer went up. */
 	if (bss->state == BSS_UP && bss->previous_state == BSS_DOWN)
 		if (IS_DEBUG_OSPF(bfd, BFD_LIB))
 			zlog_debug("%s: NSM[%s:%pI4]: BFD Up", __func__,
-				   IF_NAME(nbr->oi), &nbr->address.u.prefix4);
+				   IF_NAME(n_Br->oi), &n_Br->address.u.prefix4);
 }
 
 void ospf_neighbor_bfd_apply(struct ospf_neighbor *nbr)

@@ -55,9 +55,7 @@ struct ospf_route *ospf_find_asbr_route(struct ospf *ospf,
 	if (!CHECK_FLAG(ospf->config, OSPF_RFC1583_COMPATIBLE))
 		for (ALL_LIST_ELEMENTS_RO((struct list *)rn->info, node, or))
 			if (or->cost < OSPF_LS_INFINITY)
-				if (!OSPF_IS_AREA_ID_BACKBONE(or->u.std.area_id)
-					    &&
-				    or->path_type == OSPF_PATH_INTRA_AREA)
+				if (!OSPF_IS_AREA_ID_BACKBONE(or->u.std.area_id) && or->path_type == OSPF_PATH_INTRA_AREA)
 					listnode_add(chosen, or);
 
 	/* If none is found -- look through all. */

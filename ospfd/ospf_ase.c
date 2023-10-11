@@ -375,8 +375,7 @@ int ospf_ase_calculate_route(struct ospf *ospf, struct ospf_lsa *lsa)
 
 	if (!rn || (or = rn->info) == NULL) {
 		if (IS_DEBUG_OSPF(lsa, LSA))
-			zlog_debug("Route[External]: Adding a new route %pFX with paths %u",
-				   &p, listcount(asbr_route->paths));
+			zlog_debug("Route[External]: Adding a new route %pFX with paths %u", &p, listcount(asbr_route->paths));
 
 		ospf_route_add(ospf->new_external_route, &p, new, asbr_route);
 
@@ -487,8 +486,7 @@ static int ospf_ase_route_match_same(struct route_table *rt,
 			return 0;
 		break;
 	case OSPF_PATH_TYPE2_EXTERNAL:
-		if ((or->cost != newor->cost)
-		    || (or->u.ext.type2_cost != newor->u.ext.type2_cost))
+		if ((or->cost != newor->cost) || (or->u.ext.type2_cost != newor->u.ext.type2_cost))
 			return 0;
 		break;
 	default:
@@ -531,8 +529,7 @@ static int ospf_ase_compare_tables(struct ospf *ospf,
 		if ((or = rn->info)) {
 			if (!(new_rn = route_node_lookup(new_external_route,
 							 &rn->p)))
-				ospf_zebra_delete(
-					ospf, (struct prefix_ipv4 *)&rn->p, or);
+				ospf_zebra_delete(ospf, (struct prefix_ipv4 *)&rn->p, or);
 			else
 				route_unlock_node(new_rn);
 		}

@@ -88,9 +88,7 @@ struct ospf_route *ospf_find_asbr_route(struct ospf *ospf,
 	return best;
 }
 
-struct ospf_route *ospf_find_asbr_route_through_area(struct route_table *rtrs,
-						     struct prefix_ipv4 *asbr,
-						     struct ospf_area *area)
+struct ospf_route *ospf_find_asbr_route_through_area(struct route_table *rtrs, struct prefix_ipv4 *asbr, struct ospf_area *area)
 {
 	struct route_node *rn;
 
@@ -320,8 +318,7 @@ int ospf_ase_calculate_route(struct ospf *ospf, struct ospf_lsa *lsa)
 
 		if (rn == NULL || (asbr_route = rn->info) == NULL) {
 			if (IS_DEBUG_OSPF(lsa, LSA))
-				zlog_debug(
-					"Route[External]: Can't find route to forwarding address");
+				zlog_debug("Route[External]: Can't find route to forwarding address");
 			if (rn)
 				route_unlock_node(rn);
 			return 0;
@@ -443,8 +440,7 @@ int ospf_ase_calculate_route(struct ospf *ospf, struct ospf_lsa *lsa)
 				zlog_debug("Route[External]: Routes are equal");
 			ospf_route_copy_nexthops(or, asbr_route->paths);
 			if (al->e[0].fwd_addr.s_addr != INADDR_ANY)
-				ospf_ase_complete_direct_routes(
-					or, al->e[0].fwd_addr);
+				ospf_ase_complete_direct_routes(or, al->e[0].fwd_addr);
 		}
 	}
 	/* Make sure setting newly calculated ASBR route.*/
@@ -533,8 +529,7 @@ static int ospf_ase_compare_tables(struct ospf *ospf,
 		if ((or = rn->info)) {
 			if (!(new_rn = route_node_lookup(new_external_route,
 							 &rn->p)))
-				ospf_zebra_delete(
-					ospf, (struct prefix_ipv4 *)&rn->p, or);
+				ospf_zebra_delete(ospf, (struct prefix_ipv4 *)&rn->p, or);
 			else
 				route_unlock_node(new_rn);
 		}
@@ -581,8 +576,7 @@ static void ospf_ase_calculate_timer(struct event *t)
 
 				if (area->external_routing == OSPF_AREA_NSSA)
 					LSDB_LOOP (NSSA_LSDB(area), rn, lsa)
-						ospf_ase_calculate_route(ospf,
-									 lsa);
+						ospf_ase_calculate_route(ospf, lsa);
 			}
 		/* kevinm: And add the NSSA routes in ospf_top */
 		LSDB_LOOP (NSSA_LSDB(ospf), rn, lsa)

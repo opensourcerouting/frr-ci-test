@@ -75,10 +75,7 @@ struct ospf_route *ospf_find_asbr_route(struct ospf *ospf,
 				best = or ;
 			else if (best->cost ==
 				 or->cost
-					   && IPV4_ADDR_CMP(
-						      &best->u.std.area_id,
-						      & or->u.std.area_id)
-						      < 0)
+					   && IPV4_ADDR_CMP(&best->u.std.area_id,& or->u.std.area_id) < 0)
 				best = or ;
 		}
 

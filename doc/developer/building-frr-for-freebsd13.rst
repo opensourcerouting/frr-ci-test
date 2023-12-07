@@ -1,4 +1,4 @@
-FreeBSD 13
+FreeBSD 13 and 12
 ==========
 
 FreeBSD 13 restrictions:

@@ -1,5 +1,5 @@
-FreeBSD 13
-==========
+FreeBSD 13 and 12 and 14
+========================
 
 FreeBSD 13 restrictions:
 ------------------------

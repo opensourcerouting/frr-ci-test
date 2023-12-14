@@ -65,7 +65,6 @@ by clicking the "Slack" link under the
 Contributing
 ------------
 
-
 FRR maintains [developer's documentation](http://docs.frrouting.org/projects/dev-guide/en/latest/index.html)
 which contains the [project workflow](http://docs.frrouting.org/projects/dev-guide/en/latest/workflow.html)
 and expectations for contributors. Some technical documentation on project

@@ -75,7 +75,6 @@ We welcome and appreciate all contributions, no matter how small!
 Security
 --------
 
-
 To report security issues, please use our security mailing list:
 
 ```

@@ -1,6 +1,10 @@
 <p align="center">
 <img src="http://docs.frrouting.org/en/latest/_static/frr-icon.svg" alt="Icon" width="20%"/>
 </p>
+# CI Test Repo
+Not the real FRR Repo. It's just a CI Test !
+
+For FRR, go to https://github.com/frrouting/frr.git
 
 FRRouting
 =========

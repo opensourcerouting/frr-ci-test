@@ -61,7 +61,6 @@ For chat, we currently use [Slack](https://frrouting.slack.com). You can join
 by clicking the "Slack" link under the
 [Participate](https://frrouting.org/community) section of our website.
 
-
 Contributing
 ------------
 

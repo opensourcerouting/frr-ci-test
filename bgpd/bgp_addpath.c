@@ -53,9 +53,9 @@ const struct bgp_addpath_strategy_names *
 bgp_addpath_names(enum bgp_addpath_strat strat)
 {
 	if (strat < BGP_ADDPATH_MAX)
-		return &(strat_names[strat])
+		return &(strat_names[strat]);
 	else
-		return &unknown_names
+		return &unknown_names;
 };
 
 /*

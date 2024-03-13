@@ -22,6 +22,7 @@
 #include "zebra/zebra_rnh.h"
 #include "zebra/redistribute.h"
 #include "zebra/zebra_routemap.h"
+#include "zebra/label_manager.h"
 
 static int zebra_mpls_transit_lsp(struct vty *vty, int add_cmd,
 				  const char *inlabel_str, const char *gate_str,
@@ -42,10 +43,6 @@ static int zebra_mpls_transit_lsp(struct vty *vty, int add_cmd,
 	}
 
 	zvrf = zebra_vrf_lookup_by_id(VRF_DEFAULT);
-	if (!zvrf) {
-		vty_out(vty, "%% Default VRF does not exist\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
 
 	if (!inlabel_str) {
 		vty_out(vty, "%% No Label Information\n");
@@ -186,10 +183,6 @@ static int zebra_mpls_bind(struct vty *vty, int add_cmd, const char *prefix,
 	int ret;
 
 	zvrf = zebra_vrf_lookup_by_id(VRF_DEFAULT);
-	if (!zvrf) {
-		vty_out(vty, "%% Default VRF does not exist\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
 
 	memset(&p, 0, sizeof(p));
 	ret = str2prefix(prefix, &p);
@@ -274,12 +267,12 @@ static int zebra_mpls_config(struct vty *vty)
 	struct zebra_vrf *zvrf;
 
 	zvrf = zebra_vrf_lookup_by_id(VRF_DEFAULT);
-	if (!zvrf)
-		return 0;
 
 	write += zebra_mpls_write_lsp_config(vty, zvrf);
 	write += zebra_mpls_write_fec_config(vty, zvrf);
 	write += zebra_mpls_write_label_block_config(vty, zvrf);
+	write += lm_write_label_block_config_call(vty, zvrf);
+
 	return write;
 }
 
@@ -297,8 +290,6 @@ DEFUN (show_mpls_fec,
 	int ret;
 
 	zvrf = zebra_vrf_lookup_by_id(VRF_DEFAULT);
-	if (!zvrf)
-		return 0;
 
 	if (argc == 3)
 		zebra_mpls_print_fec_table(vty, zvrf);
@@ -373,10 +364,6 @@ static int zebra_mpls_global_block(struct vty *vty, int add_cmd,
 	struct zebra_vrf *zvrf;
 
 	zvrf = zebra_vrf_lookup_by_id(VRF_DEFAULT);
-	if (!zvrf) {
-		vty_out(vty, "%% Default VRF does not exist\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
 
 	if (add_cmd) {
 		if (!start_label_str || !end_label_str) {

@@ -327,7 +327,7 @@ Configuration Commands
    Delete or specify a bandwidth constraint for a dynamic candidate path.
 
 
-.. clicmd:: metric [bound] METRIC VALUE [required]
+.. clicmd:: metric [bound] METRIC VALUE [required] [computed]
 
    Delete or specify a metric constraint for a dynamic candidate path.
 
@@ -475,6 +475,9 @@ Configuration Commands
 
    Specify the maximum SID depth in a PCC definition.
 
+.. clicmd:: no msd [(1-32)]
+
+   Default the maximum SID depth to 4.
 
 .. clicmd:: peer WORD [precedence (1-255)]
 

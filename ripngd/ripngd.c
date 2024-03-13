@@ -392,11 +392,10 @@ static void ripng_nexthop_rte(struct rte *rte, struct sockaddr_in6 *from,
 /* If ifp has same link-local address then return 1. */
 static int ripng_lladdr_check(struct interface *ifp, struct in6_addr *addr)
 {
-	struct listnode *node;
 	struct connected *connected;
 	struct prefix *p;
 
-	for (ALL_LIST_ELEMENTS_RO(ifp->connected, node, connected)) {
+	frr_each (if_connected, ifp->connected, connected) {
 		p = connected->address;
 
 		if (p->family == AF_INET6
@@ -612,8 +611,8 @@ struct ripng_info *ripng_ecmp_delete(struct ripng *ripng,
 		 */
 		EVENT_OFF(rinfo->t_garbage_collect);
 		listnode_delete(list, rinfo);
-		if (ripng_route_rte(rinfo)
-		    && CHECK_FLAG(rinfo->flags, RIPNG_RTF_FIB))
+		if (ripng_route_rte(rinfo) &&
+		    CHECK_FLAG(rinfo->flags, RIPNG_RTF_FIB))
 			/* The ADD message implies the update. */
 			ripng_zebra_ipv6_add(ripng, rp);
 		ripng_info_free(rinfo);
@@ -629,8 +628,8 @@ struct ripng_info *ripng_ecmp_delete(struct ripng *ripng,
 		RIPNG_TIMER_ON(rinfo->t_garbage_collect, ripng_garbage_collect,
 			       ripng->garbage_time);
 
-		if (ripng_route_rte(rinfo)
-		    && CHECK_FLAG(rinfo->flags, RIPNG_RTF_FIB))
+		if (ripng_route_rte(rinfo) &&
+		    CHECK_FLAG(rinfo->flags, RIPNG_RTF_FIB))
 			ripng_zebra_ipv6_delete(ripng, rp);
 	}
 
@@ -676,8 +675,7 @@ static int ripng_filter(int ripng_distribute, struct prefix_ipv6 *p,
 	/* Input distribute-list filtering. */
 	if (ri->list[ripng_distribute]) {
 		if (access_list_apply(ri->list[ripng_distribute],
-				      (struct prefix *)p)
-		    == FILTER_DENY) {
+				      (struct prefix *)p) == FILTER_DENY) {
 			if (IS_RIPNG_DEBUG_PACKET)
 				zlog_debug("%pFX filtered by distribute %s", p,
 					   inout);
@@ -686,8 +684,7 @@ static int ripng_filter(int ripng_distribute, struct prefix_ipv6 *p,
 	}
 	if (ri->prefix[ripng_distribute]) {
 		if (prefix_list_apply(ri->prefix[ripng_distribute],
-				      (struct prefix *)p)
-		    == PREFIX_DENY) {
+				      (struct prefix *)p) == PREFIX_DENY) {
 			if (IS_RIPNG_DEBUG_PACKET)
 				zlog_debug("%pFX filtered by prefix-list %s", p,
 					   inout);
@@ -818,9 +815,8 @@ static void ripng_route_process(struct rte *rte, struct sockaddr_in6 *from,
 			}
 		}
 		rte->tag = htons(newinfo.tag_out); /* XXX */
-		rte->metric =
-			newinfo.metric_out; /* XXX: the routemap uses the
-					       metric_out field */
+		rte->metric = newinfo.metric_out;  /* XXX: the routemap uses the
+			 metric_out field */
 	}
 
 	/* Once the entry has been validated, update the metric by
@@ -1072,7 +1068,7 @@ void ripng_redistribute_delete(struct ripng *ripng, int type, int sub_type,
 				/* Aggregate count decrement. */
 				ripng_aggregate_decrement(rp, rinfo);
 
-				rinfo->flags |= RIPNG_RTF_CHANGED;
+				SET_FLAG(rinfo->flags, RIPNG_RTF_CHANGED);
 
 				if (IS_RIPNG_DEBUG_EVENT)
 					zlog_debug(
@@ -1111,7 +1107,7 @@ void ripng_redistribute_withdraw(struct ripng *ripng, int type)
 				/* Aggregate count decrement. */
 				ripng_aggregate_decrement(rp, rinfo);
 
-				rinfo->flags |= RIPNG_RTF_CHANGED;
+				SET_FLAG(rinfo->flags, RIPNG_RTF_CHANGED);
 
 				if (IS_RIPNG_DEBUG_EVENT) {
 					struct prefix_ipv6 *p =
@@ -1645,8 +1641,8 @@ void ripng_output_process(struct interface *ifp, struct sockaddr_in6 *to,
 				continue;
 
 			/* Changed route only output. */
-			if (route_type == ripng_changed_route
-			    && (!(rinfo->flags & RIPNG_RTF_CHANGED)))
+			if (route_type == ripng_changed_route &&
+			    (!CHECK_FLAG(rinfo->flags, RIPNG_RTF_CHANGED)))
 				continue;
 
 			/* Split horizon. */
@@ -1657,9 +1653,10 @@ void ripng_output_process(struct interface *ifp, struct sockaddr_in6 *to,
 
 				for (ALL_LIST_ELEMENTS_RO(list, listnode,
 							  tmp_rinfo))
-					if (tmp_rinfo->type == ZEBRA_ROUTE_RIPNG
-					    && tmp_rinfo->ifindex
-						       == ifp->ifindex) {
+					if (tmp_rinfo->type ==
+						    ZEBRA_ROUTE_RIPNG &&
+					    tmp_rinfo->ifindex ==
+						    ifp->ifindex) {
 						suppress = 1;
 						break;
 					}
@@ -1717,11 +1714,11 @@ void ripng_output_process(struct interface *ifp, struct sockaddr_in6 *to,
 					/* If the route is not connected or
 					   localy generated
 					   one, use default-metric value */
-					if (rinfo->type != ZEBRA_ROUTE_RIPNG
-					    && rinfo->type
-						       != ZEBRA_ROUTE_CONNECT
-					    && rinfo->metric
-						       != RIPNG_METRIC_INFINITY)
+					if (rinfo->type != ZEBRA_ROUTE_RIPNG &&
+					    rinfo->type !=
+						    ZEBRA_ROUTE_CONNECT &&
+					    rinfo->metric !=
+						    RIPNG_METRIC_INFINITY)
 						rinfo->metric_out =
 							ripng->default_metric;
 				}
@@ -1738,16 +1735,15 @@ void ripng_output_process(struct interface *ifp, struct sockaddr_in6 *to,
 			/* Perform split-horizon with poisoned reverse
 			 * for RIPng routes.
 			 **/
-			if (ri->split_horizon
-			    == RIPNG_SPLIT_HORIZON_POISONED_REVERSE) {
+			if (ri->split_horizon ==
+			    RIPNG_SPLIT_HORIZON_POISONED_REVERSE) {
 				struct ripng_info *tmp_rinfo = NULL;
 
 				for (ALL_LIST_ELEMENTS_RO(list, listnode,
 							  tmp_rinfo))
-					if ((tmp_rinfo->type
-					     == ZEBRA_ROUTE_RIPNG)
-					    && tmp_rinfo->ifindex
-						       == ifp->ifindex)
+					if ((tmp_rinfo->type ==
+					     ZEBRA_ROUTE_RIPNG) &&
+					    tmp_rinfo->ifindex == ifp->ifindex)
 						rinfo->metric_out =
 							RIPNG_METRIC_INFINITY;
 			}
@@ -2624,17 +2620,10 @@ static int ripng_vrf_new(struct vrf *vrf)
 
 static int ripng_vrf_delete(struct vrf *vrf)
 {
-	struct ripng *ripng;
-
 	if (IS_RIPNG_DEBUG_EVENT)
 		zlog_debug("%s: VRF deleted: %s(%u)", __func__, vrf->name,
 			   vrf->vrf_id);
 
-	ripng = ripng_lookup_by_vrf_name(vrf->name);
-	if (!ripng)
-		return 0;
-
-	ripng_clean(ripng);
 	return 0;
 }
 

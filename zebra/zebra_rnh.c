@@ -513,10 +513,14 @@ static bool rnh_check_re_nexthops(const struct route_entry *re,
 		goto done;
 	}
 
-	/* Some special checks if registration asked for them. */
+	/*
+	 * Some special checks if registration asked for them.
+	 * LOCAL routes are by their definition not CONNECTED
+	 * and as such should not be considered here
+	 */
 	if (CHECK_FLAG(rnh->flags, ZEBRA_NHT_CONNECTED)) {
-		if ((re->type == ZEBRA_ROUTE_CONNECT)
-		    || (re->type == ZEBRA_ROUTE_STATIC))
+		if ((re->type == ZEBRA_ROUTE_CONNECT) ||
+		    (re->type == ZEBRA_ROUTE_STATIC))
 			ret = true;
 		if (re->type == ZEBRA_ROUTE_NHRP) {
 
@@ -1268,6 +1272,7 @@ void show_nexthop_json_helper(json_object *json_nexthop,
 	json_object *json_backups = NULL;
 	json_object *json_seg6local = NULL;
 	json_object *json_seg6 = NULL;
+	json_object *json_segs = NULL;
 	int i;
 
 	json_object_int_add(json_nexthop, "flags", nexthop->flags);
@@ -1425,11 +1430,31 @@ void show_nexthop_json_helper(json_object *json_nexthop,
 				nexthop->nh_srv6->seg6local_action));
 		json_object_object_add(json_nexthop, "seg6local",
 				       json_seg6local);
-
-		json_seg6 = json_object_new_object();
-		json_object_string_addf(json_seg6, "segs", "%pI6",
-					&nexthop->nh_srv6->seg6_segs);
-		json_object_object_add(json_nexthop, "seg6", json_seg6);
+		if (nexthop->nh_srv6->seg6_segs &&
+		    nexthop->nh_srv6->seg6_segs->num_segs == 1) {
+			json_seg6 = json_object_new_object();
+			json_object_string_addf(json_seg6, "segs", "%pI6",
+						&nexthop->nh_srv6->seg6_segs
+							 ->seg[0]);
+			json_object_object_add(json_nexthop, "seg6", json_seg6);
+		} else {
+			if (nexthop->nh_srv6->seg6_segs) {
+				json_segs = json_object_new_array();
+				for (int seg_idx = 0;
+				     seg_idx <
+				     nexthop->nh_srv6->seg6_segs->num_segs;
+				     seg_idx++)
+					json_object_array_add(
+						json_segs,
+						json_object_new_stringf(
+							"%pI6",
+							&nexthop->nh_srv6
+								 ->seg6_segs
+								 ->seg[seg_idx]));
+				json_object_object_add(json_nexthop, "seg6",
+						       json_segs);
+			}
+		}
 	}
 }
 
@@ -1440,7 +1465,9 @@ void show_route_nexthop_helper(struct vty *vty, const struct route_entry *re,
 			       const struct nexthop *nexthop)
 {
 	char buf[MPLS_LABEL_STRLEN];
-	int i;
+	char seg_buf[SRV6_SEG_STRLEN];
+	struct seg6_segs segs;
+	uint8_t i;
 
 	switch (nexthop->type) {
 	case NEXTHOP_TYPE_IPV4:
@@ -1538,9 +1565,17 @@ void show_route_nexthop_helper(struct vty *vty, const struct route_entry *re,
 				seg6local_action2str(
 					nexthop->nh_srv6->seg6local_action),
 				buf);
-		if (IPV6_ADDR_CMP(&nexthop->nh_srv6->seg6_segs, &in6addr_any))
-			vty_out(vty, ", seg6 %pI6",
-				&nexthop->nh_srv6->seg6_segs);
+		if (nexthop->nh_srv6->seg6_segs &&
+		    IPV6_ADDR_CMP(&nexthop->nh_srv6->seg6_segs->seg[0],
+				  &in6addr_any)) {
+			segs.num_segs = nexthop->nh_srv6->seg6_segs->num_segs;
+			for (i = 0; i < segs.num_segs; i++)
+				memcpy(&segs.segs[i],
+				       &nexthop->nh_srv6->seg6_segs->seg[i],
+				       sizeof(struct in6_addr));
+			snprintf_seg6_segs(seg_buf, SRV6_SEG_STRLEN, &segs);
+			vty_out(vty, ", seg6 %s", seg_buf);
+		}
 	}
 
 	if (nexthop->weight)

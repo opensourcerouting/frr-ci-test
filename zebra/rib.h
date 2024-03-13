@@ -167,6 +167,10 @@ struct route_entry {
 
 #define RIB_KERNEL_ROUTE(R) RKERNEL_ROUTE((R)->type)
 
+/* Define route types that are equivalent to "connected". */
+#define RIB_CONNECTED_ROUTE(R)                                                 \
+	((R)->type == ZEBRA_ROUTE_CONNECT || (R)->type == ZEBRA_ROUTE_LOCAL || (R)->type == ZEBRA_ROUTE_NHRP)
+
 /* meta-queue structure:
  * sub-queue 0: nexthop group objects
  * sub-queue 1: EVPN/VxLAN objects
@@ -181,6 +185,10 @@ struct route_entry {
  *              don't generate routes
  */
 #define MQ_SIZE 11
+
+/* For checking that an object has already queued in some sub-queue */
+#define MQ_BIT_MASK ((1 << MQ_SIZE) - 1)
+
 struct meta_queue {
 	struct list *subq[MQ_SIZE];
 	uint32_t size; /* sum of lengths of all subqueues */
@@ -329,13 +337,15 @@ int route_entry_update_nhe(struct route_entry *re,
 			   struct nhg_hash_entry *new_nhghe);
 
 /* NHG replace has happend, we have to update route_entry pointers to new one */
-void rib_handle_nhg_replace(struct nhg_hash_entry *old_entry,
-			    struct nhg_hash_entry *new_entry);
+int rib_handle_nhg_replace(struct nhg_hash_entry *old_entry,
+			   struct nhg_hash_entry *new_entry);
 
 #define route_entry_dump(prefix, src, re) _route_entry_dump(__func__, prefix, src, re)
 extern void _route_entry_dump(const char *func, union prefixconstptr pp,
 			      union prefixconstptr src_pp,
 			      const struct route_entry *re);
+
+void zebra_rib_route_entry_free(struct route_entry *re);
 
 struct route_entry *
 zebra_rib_route_entry_new(vrf_id_t vrf_id, int type, uint8_t instance,
@@ -406,7 +416,8 @@ extern void rib_update_table(struct route_table *table,
 extern void rib_sweep_route(struct event *t);
 extern void rib_sweep_table(struct route_table *table);
 extern void rib_close_table(struct route_table *table);
-extern void rib_init(void);
+extern void zebra_rib_init(void);
+extern void zebra_rib_terminate(void);
 extern unsigned long rib_score_proto(uint8_t proto, unsigned short instance);
 extern unsigned long rib_score_proto_table(uint8_t proto,
 					   unsigned short instance,
@@ -421,6 +432,7 @@ extern int rib_queue_nhg_ctx_add(struct nhg_ctx *ctx);
 
 /* Enqueue incoming nhg from proto daemon for processing */
 extern int rib_queue_nhe_add(struct nhg_hash_entry *nhe);
+extern int rib_queue_nhe_del(struct nhg_hash_entry *nhe);
 
 /* Enqueue evpn route for processing */
 int zebra_rib_queue_evpn_route_add(vrf_id_t vrf_id, const struct ethaddr *rmac,
@@ -465,6 +477,13 @@ extern uint8_t route_distance(int type);
 extern void zebra_rib_evaluate_rn_nexthops(struct route_node *rn, uint32_t seq,
 					   bool rt_delete);
 
+/*
+ * rib_find_rn_from_ctx
+ *
+ * Returns a lock increased route_node for the appropriate
+ * table and prefix specified by the context.  Developer
+ * should unlock the node when done.
+ */
 extern struct route_node *
 rib_find_rn_from_ctx(const struct zebra_dplane_ctx *ctx);
 
@@ -612,7 +631,7 @@ extern void zebra_vty_init(void);
 
 extern pid_t pid;
 
-extern bool v6_rr_semantics;
+extern uint32_t rt_table_main_id;
 
 /* Name of hook calls */
 #define ZEBRA_ON_RIB_PROCESS_HOOK_CALL "on_rib_process_dplane_results"

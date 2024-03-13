@@ -35,6 +35,7 @@
 #include "isisd/isis_adjacency.h"
 #include "isisd/isis_spf.h"
 #include "isisd/isis_spf_private.h"
+#include "isisd/isis_srv6.h"
 #include "isisd/isis_te.h"
 #include "isisd/isis_mt.h"
 #include "isisd/isis_redist.h"
@@ -59,8 +60,8 @@ int isis_instance_create(struct nb_cb_create_args *args)
 
 	if (args->event != NB_EV_APPLY)
 		return NB_OK;
-	vrf_name = yang_dnode_get_string(args->dnode, "./vrf");
-	area_tag = yang_dnode_get_string(args->dnode, "./area-tag");
+	vrf_name = yang_dnode_get_string(args->dnode, "vrf");
+	area_tag = yang_dnode_get_string(args->dnode, "area-tag");
 
 	area = isis_area_lookup_by_vrf(area_tag, vrf_name);
 	if (area)
@@ -649,12 +650,12 @@ int isis_instance_lsp_generation_interval_level_2_modify(
  */
 void ietf_backoff_delay_apply_finish(struct nb_cb_apply_finish_args *args)
 {
-	long init_delay = yang_dnode_get_uint16(args->dnode, "./init-delay");
-	long short_delay = yang_dnode_get_uint16(args->dnode, "./short-delay");
-	long long_delay = yang_dnode_get_uint16(args->dnode, "./long-delay");
-	long holddown = yang_dnode_get_uint16(args->dnode, "./hold-down");
+	long init_delay = yang_dnode_get_uint16(args->dnode, "init-delay");
+	long short_delay = yang_dnode_get_uint16(args->dnode, "short-delay");
+	long long_delay = yang_dnode_get_uint16(args->dnode, "long-delay");
+	long holddown = yang_dnode_get_uint16(args->dnode, "hold-down");
 	long timetolearn =
-		yang_dnode_get_uint16(args->dnode, "./time-to-learn");
+		yang_dnode_get_uint16(args->dnode, "time-to-learn");
 	struct isis_area *area = nb_running_get_entry(args->dnode, NULL, true);
 	size_t bufsiz = strlen(area->area_tag) + sizeof("IS-IS  Lx");
 	char *buf = XCALLOC(MTYPE_TMP, bufsiz);
@@ -925,11 +926,11 @@ int isis_instance_spf_prefix_priorities_medium_access_list_name_destroy(
  */
 void area_password_apply_finish(struct nb_cb_apply_finish_args *args)
 {
-	const char *password = yang_dnode_get_string(args->dnode, "./password");
+	const char *password = yang_dnode_get_string(args->dnode, "password");
 	struct isis_area *area = nb_running_get_entry(args->dnode, NULL, true);
-	int pass_type = yang_dnode_get_enum(args->dnode, "./password-type");
+	int pass_type = yang_dnode_get_enum(args->dnode, "password-type");
 	uint8_t snp_auth =
-		yang_dnode_get_enum(args->dnode, "./authenticate-snp");
+		yang_dnode_get_enum(args->dnode, "authenticate-snp");
 
 	switch (pass_type) {
 	case ISIS_PASSWD_TYPE_CLEARTXT:
@@ -996,11 +997,11 @@ int isis_instance_area_password_authenticate_snp_modify(
  */
 void domain_password_apply_finish(struct nb_cb_apply_finish_args *args)
 {
-	const char *password = yang_dnode_get_string(args->dnode, "./password");
+	const char *password = yang_dnode_get_string(args->dnode, "password");
 	struct isis_area *area = nb_running_get_entry(args->dnode, NULL, true);
-	int pass_type = yang_dnode_get_enum(args->dnode, "./password-type");
+	int pass_type = yang_dnode_get_enum(args->dnode, "password-type");
 	uint8_t snp_auth =
-		yang_dnode_get_enum(args->dnode, "./authenticate-snp");
+		yang_dnode_get_enum(args->dnode, "authenticate-snp");
 
 	switch (pass_type) {
 	case ISIS_PASSWD_TYPE_CLEARTXT:
@@ -1072,9 +1073,9 @@ void default_info_origin_apply_finish(const struct lyd_node *dnode, int family)
 	unsigned long metric = 0;
 	const char *routemap = NULL;
 	struct isis_area *area = nb_running_get_entry(dnode, NULL, true);
-	int level = yang_dnode_get_enum(dnode, "./level");
+	int level = yang_dnode_get_enum(dnode, "level");
 
-	if (yang_dnode_get_bool(dnode, "./always")) {
+	if (yang_dnode_get_bool(dnode, "always")) {
 		originate_type = DEFAULT_ORIGINATE_ALWAYS;
 	} else if (family == AF_INET6) {
 		zlog_warn(
@@ -1082,13 +1083,13 @@ void default_info_origin_apply_finish(const struct lyd_node *dnode, int family)
 			__func__);
 	}
 
-	if (yang_dnode_exists(dnode, "./metric"))
-		metric = yang_dnode_get_uint32(dnode, "./metric");
-	if (yang_dnode_exists(dnode, "./route-map"))
-		routemap = yang_dnode_get_string(dnode, "./route-map");
+	if (yang_dnode_exists(dnode, "metric"))
+		metric = yang_dnode_get_uint32(dnode, "metric");
+	if (yang_dnode_exists(dnode, "route-map"))
+		routemap = yang_dnode_get_string(dnode, "route-map");
 
 	isis_redist_set(area, level, family, DEFAULT_ROUTE, metric, routemap,
-			originate_type);
+			originate_type, 0);
 }
 
 void default_info_origin_ipv4_apply_finish(struct nb_cb_apply_finish_args *args)
@@ -1118,8 +1119,8 @@ int isis_instance_default_information_originate_ipv4_destroy(
 		return NB_OK;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	level = yang_dnode_get_enum(args->dnode, "./level");
-	isis_redist_unset(area, level, AF_INET, DEFAULT_ROUTE);
+	level = yang_dnode_get_enum(args->dnode, "level");
+	isis_redist_unset(area, level, AF_INET, DEFAULT_ROUTE, 0);
 
 	return NB_OK;
 }
@@ -1181,8 +1182,8 @@ int isis_instance_default_information_originate_ipv6_destroy(
 		return NB_OK;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	level = yang_dnode_get_enum(args->dnode, "./level");
-	isis_redist_unset(area, level, AF_INET6, DEFAULT_ROUTE);
+	level = yang_dnode_get_enum(args->dnode, "level");
+	isis_redist_unset(area, level, AF_INET6, DEFAULT_ROUTE, 0);
 
 	return NB_OK;
 }
@@ -1235,16 +1236,16 @@ void redistribute_apply_finish(const struct lyd_node *dnode, int family)
 	const char *routemap = NULL;
 	struct isis_area *area;
 
-	type = yang_dnode_get_enum(dnode, "./protocol");
-	level = yang_dnode_get_enum(dnode, "./level");
+	type = yang_dnode_get_enum(dnode, "protocol");
+	level = yang_dnode_get_enum(dnode, "level");
 	area = nb_running_get_entry(dnode, NULL, true);
 
-	if (yang_dnode_exists(dnode, "./metric"))
-		metric = yang_dnode_get_uint32(dnode, "./metric");
-	if (yang_dnode_exists(dnode, "./route-map"))
-		routemap = yang_dnode_get_string(dnode, "./route-map");
+	if (yang_dnode_exists(dnode, "metric"))
+		metric = yang_dnode_get_uint32(dnode, "metric");
+	if (yang_dnode_exists(dnode, "route-map"))
+		routemap = yang_dnode_get_string(dnode, "route-map");
 
-	isis_redist_set(area, level, family, type, metric, routemap, 0);
+	isis_redist_set(area, level, family, type, metric, routemap, 0, 0);
 }
 
 void redistribute_ipv4_apply_finish(struct nb_cb_apply_finish_args *args)
@@ -1272,15 +1273,16 @@ int isis_instance_redistribute_ipv4_destroy(struct nb_cb_destroy_args *args)
 		return NB_OK;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	level = yang_dnode_get_enum(args->dnode, "./level");
-	type = yang_dnode_get_enum(args->dnode, "./protocol");
-	isis_redist_unset(area, level, AF_INET, type);
+	level = yang_dnode_get_enum(args->dnode, "level");
+	type = yang_dnode_get_enum(args->dnode, "protocol");
+	isis_redist_unset(area, level, AF_INET, type, 0);
 
 	return NB_OK;
 }
 
 /*
  * XPath: /frr-isisd:isis/instance/redistribute/ipv4/route-map
+ * XPath: /frr-isisd:isis/instance/redistribute/ipv4/table/route-map
  */
 int isis_instance_redistribute_ipv4_route_map_modify(
 	struct nb_cb_modify_args *args)
@@ -1298,11 +1300,64 @@ int isis_instance_redistribute_ipv4_route_map_destroy(
 
 /*
  * XPath: /frr-isisd:isis/instance/redistribute/ipv4/metric
+ * XPath: /frr-isisd:isis/instance/redistribute/ipv4/table/metric
  */
 int isis_instance_redistribute_ipv4_metric_modify(
 	struct nb_cb_modify_args *args)
 {
 	/* It's all done by redistribute_apply_finish */
+	return NB_OK;
+}
+
+int isis_instance_redistribute_ipv4_metric_destroy(struct nb_cb_destroy_args *args)
+{
+	/* It's all done by redistribute_apply_finish */
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/redistribute/ipv4/table
+ */
+int isis_instance_redistribute_ipv4_table_create(struct nb_cb_create_args *args)
+{
+	uint16_t table;
+	int type, level;
+	unsigned long metric = 0;
+	const char *routemap = NULL;
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	type = yang_dnode_get_enum(args->dnode, "../protocol");
+	level = yang_dnode_get_enum(args->dnode, "../level");
+	area = nb_running_get_entry(args->dnode, "../.", true);
+
+	if (yang_dnode_exists(args->dnode, "metric"))
+		metric = yang_dnode_get_uint32(args->dnode, "metric");
+	if (yang_dnode_exists(args->dnode, "route-map"))
+		routemap = yang_dnode_get_string(args->dnode, "route-map");
+
+	table = yang_dnode_get_uint16(args->dnode, "table");
+	isis_redist_set(area, level, AF_INET, type, metric, routemap, 0, table);
+
+	return NB_OK;
+}
+int isis_instance_redistribute_ipv4_table_destroy(struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	int level, type;
+	uint16_t table;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, "../.", true);
+	level = yang_dnode_get_enum(args->dnode, "../level");
+	type = yang_dnode_get_enum(args->dnode, "../protocol");
+	table = yang_dnode_get_uint16(args->dnode, "table");
+	isis_redist_unset(area, level, AF_INET, type, table);
+
 	return NB_OK;
 }
 
@@ -1324,9 +1379,9 @@ int isis_instance_redistribute_ipv6_destroy(struct nb_cb_destroy_args *args)
 		return NB_OK;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	level = yang_dnode_get_enum(args->dnode, "./level");
-	type = yang_dnode_get_enum(args->dnode, "./protocol");
-	isis_redist_unset(area, level, AF_INET6, type);
+	level = yang_dnode_get_enum(args->dnode, "level");
+	type = yang_dnode_get_enum(args->dnode, "protocol");
+	isis_redist_unset(area, level, AF_INET6, type, 0);
 
 	return NB_OK;
 }
@@ -1355,6 +1410,33 @@ int isis_instance_redistribute_ipv6_metric_modify(
 	struct nb_cb_modify_args *args)
 {
 	/* It's all done by redistribute_apply_finish */
+	return NB_OK;
+}
+
+int isis_instance_redistribute_ipv6_metric_destroy(struct nb_cb_destroy_args *args)
+{
+	/* It's all done by redistribute_apply_finish */
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/redistribute/ipv6/table
+ */
+int isis_instance_redistribute_ipv6_table_create(struct nb_cb_create_args *args)
+{
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	/* TODO */
+	return NB_OK;
+}
+
+int isis_instance_redistribute_ipv6_table_destroy(struct nb_cb_destroy_args *args)
+{
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	/* TODO */
 	return NB_OK;
 }
 
@@ -1650,8 +1732,8 @@ int isis_instance_fast_reroute_level_1_lfa_tiebreaker_create(
 		return NB_OK;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	index = yang_dnode_get_uint8(args->dnode, "./index");
-	type = yang_dnode_get_enum(args->dnode, "./type");
+	index = yang_dnode_get_uint8(args->dnode, "index");
+	type = yang_dnode_get_enum(args->dnode, "type");
 
 	tie_b = isis_lfa_tiebreaker_add(area, ISIS_LEVEL1, index, type);
 	nb_running_set_entry(args->dnode, tie_b);
@@ -1799,8 +1881,8 @@ int isis_instance_fast_reroute_level_2_lfa_tiebreaker_create(
 		return NB_OK;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	index = yang_dnode_get_uint8(args->dnode, "./index");
-	type = yang_dnode_get_enum(args->dnode, "./type");
+	index = yang_dnode_get_uint8(args->dnode, "index");
+	type = yang_dnode_get_enum(args->dnode, "type");
 
 	tie_b = isis_lfa_tiebreaker_add(area, ISIS_LEVEL2, index, type);
 	nb_running_set_entry(args->dnode, tie_b);
@@ -2130,10 +2212,10 @@ int isis_instance_segment_routing_label_blocks_pre_validate(
 	uint32_t srlb_lbound;
 	uint32_t srlb_ubound;
 
-	srgb_lbound = yang_dnode_get_uint32(args->dnode, "./srgb/lower-bound");
-	srgb_ubound = yang_dnode_get_uint32(args->dnode, "./srgb/upper-bound");
-	srlb_lbound = yang_dnode_get_uint32(args->dnode, "./srlb/lower-bound");
-	srlb_ubound = yang_dnode_get_uint32(args->dnode, "./srlb/upper-bound");
+	srgb_lbound = yang_dnode_get_uint32(args->dnode, "srgb/lower-bound");
+	srgb_ubound = yang_dnode_get_uint32(args->dnode, "srgb/upper-bound");
+	srlb_lbound = yang_dnode_get_uint32(args->dnode, "srlb/lower-bound");
+	srlb_ubound = yang_dnode_get_uint32(args->dnode, "srlb/upper-bound");
 
 	/* Check that the block size does not exceed 65535 */
 	if ((srgb_ubound - srgb_lbound + 1) > 65535) {
@@ -2173,8 +2255,8 @@ void isis_instance_segment_routing_srgb_apply_finish(
 	uint32_t lower_bound, upper_bound;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	lower_bound = yang_dnode_get_uint32(args->dnode, "./lower-bound");
-	upper_bound = yang_dnode_get_uint32(args->dnode, "./upper-bound");
+	lower_bound = yang_dnode_get_uint32(args->dnode, "lower-bound");
+	upper_bound = yang_dnode_get_uint32(args->dnode, "upper-bound");
 
 	isis_sr_cfg_srgb_update(area, lower_bound, upper_bound);
 }
@@ -2239,8 +2321,8 @@ void isis_instance_segment_routing_srlb_apply_finish(
 	uint32_t lower_bound, upper_bound;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	lower_bound = yang_dnode_get_uint32(args->dnode, "./lower-bound");
-	upper_bound = yang_dnode_get_uint32(args->dnode, "./upper-bound");
+	lower_bound = yang_dnode_get_uint32(args->dnode, "lower-bound");
+	upper_bound = yang_dnode_get_uint32(args->dnode, "upper-bound");
 
 	isis_sr_cfg_srlb_update(area, lower_bound, upper_bound);
 }
@@ -2346,7 +2428,7 @@ int isis_instance_segment_routing_prefix_sid_map_prefix_sid_create(
 		return NB_OK;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	yang_dnode_get_prefix(&prefix, args->dnode, "./prefix");
+	yang_dnode_get_prefix(&prefix, args->dnode, "prefix");
 
 	pcfg = isis_sr_cfg_prefix_add(area, &prefix, SR_ALGORITHM_SPF);
 	nb_running_set_entry(args->dnode, pcfg);
@@ -2384,13 +2466,13 @@ int isis_instance_segment_routing_prefix_sid_map_prefix_sid_pre_validate(
 	enum sr_sid_value_type sid_type;
 	struct isis_prefix_sid psid = {};
 
-	yang_dnode_get_prefix(&prefix, args->dnode, "./prefix");
+	yang_dnode_get_prefix(&prefix, args->dnode, "prefix");
 	srgb_lbound = yang_dnode_get_uint32(
 		args->dnode, "../../label-blocks/srgb/lower-bound");
 	srgb_ubound = yang_dnode_get_uint32(
 		args->dnode, "../../label-blocks/srgb/upper-bound");
-	sid = yang_dnode_get_uint32(args->dnode, "./sid-value");
-	sid_type = yang_dnode_get_enum(args->dnode, "./sid-value-type");
+	sid = yang_dnode_get_uint32(args->dnode, "sid-value");
+	sid_type = yang_dnode_get_enum(args->dnode, "sid-value-type");
 
 	/* Check for invalid indexes/labels. */
 	srgb_range = srgb_ubound - srgb_lbound + 1;
@@ -2554,8 +2636,8 @@ int isis_instance_segment_routing_algorithm_prefix_sid_create(
 		return NB_OK;
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
-	yang_dnode_get_prefix(&prefix, args->dnode, "./prefix");
-	algorithm = yang_dnode_get_uint32(args->dnode, "./algo");
+	yang_dnode_get_prefix(&prefix, args->dnode, "prefix");
+	algorithm = yang_dnode_get_uint32(args->dnode, "algo");
 
 	pcfg = isis_sr_cfg_prefix_add(area, &prefix, algorithm);
 	pcfg->algorithm = algorithm;
@@ -2594,13 +2676,13 @@ int isis_instance_segment_routing_algorithm_prefix_sid_pre_validate(
 	enum sr_sid_value_type sid_type;
 	struct isis_prefix_sid psid = {};
 
-	yang_dnode_get_prefix(&prefix, args->dnode, "./prefix");
+	yang_dnode_get_prefix(&prefix, args->dnode, "prefix");
 	srgb_lbound = yang_dnode_get_uint32(
 		args->dnode, "../../label-blocks/srgb/lower-bound");
 	srgb_ubound = yang_dnode_get_uint32(
 		args->dnode, "../../label-blocks/srgb/upper-bound");
-	sid = yang_dnode_get_uint32(args->dnode, "./sid-value");
-	sid_type = yang_dnode_get_enum(args->dnode, "./sid-value-type");
+	sid = yang_dnode_get_uint32(args->dnode, "sid-value");
+	sid_type = yang_dnode_get_enum(args->dnode, "sid-value-type");
 
 	/* Check for invalid indexes/labels. */
 	srgb_range = srgb_ubound - srgb_lbound + 1;
@@ -2758,8 +2840,8 @@ int isis_instance_flex_algo_create(struct nb_cb_create_args *args)
 	uint32_t priority = FLEX_ALGO_PRIO_DEFAULT;
 	struct isis_flex_algo_alloc_arg arg;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./flex-algo");
-	advertise = yang_dnode_exists(args->dnode, "./advertise-definition");
+	algorithm = yang_dnode_get_uint32(args->dnode, "flex-algo");
+	advertise = yang_dnode_exists(args->dnode, "advertise-definition");
 
 	switch (args->event) {
 	case NB_EV_APPLY:
@@ -2793,7 +2875,7 @@ int isis_instance_flex_algo_destroy(struct nb_cb_destroy_args *args)
 	struct isis_area *area;
 	uint32_t algorithm;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "flex-algo");
 	area = nb_running_get_entry(args->dnode, NULL, true);
 
 	switch (args->event) {
@@ -2822,8 +2904,8 @@ int isis_instance_flex_algo_advertise_definition_modify(
 	uint32_t algorithm;
 
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
-	advertise = yang_dnode_exists(args->dnode, "./../advertise-definition");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
+	advertise = yang_dnode_exists(args->dnode, "../advertise-definition");
 
 	switch (args->event) {
 	case NB_EV_APPLY:
@@ -2855,7 +2937,7 @@ int isis_instance_flex_algo_advertise_definition_destroy(
 
 	area = nb_running_get_entry(args->dnode, NULL, true);
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
 
 	switch (args->event) {
 	case NB_EV_APPLY:
@@ -3071,7 +3153,7 @@ int isis_instance_flex_algo_prefix_metric_create(struct nb_cb_create_args *args)
 	if (!area)
 		return NB_ERR_RESOURCE;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
 
 	switch (args->event) {
 	case NB_EV_APPLY:
@@ -3106,7 +3188,7 @@ int isis_instance_flex_algo_prefix_metric_destroy(
 	if (!area)
 		return NB_ERR_RESOURCE;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
 
 	switch (args->event) {
 	case NB_EV_APPLY:
@@ -3141,7 +3223,7 @@ static int isis_instance_flex_algo_dplane_set(struct nb_cb_create_args *args,
 	if (!area)
 		return NB_ERR_RESOURCE;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
 
 	switch (args->event) {
 	case NB_EV_APPLY:
@@ -3183,7 +3265,7 @@ static int isis_instance_flex_algo_dplane_unset(struct nb_cb_destroy_args *args,
 	if (!area)
 		return NB_ERR_RESOURCE;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
 
 	switch (args->event) {
 	case NB_EV_APPLY:
@@ -3266,7 +3348,7 @@ int isis_instance_flex_algo_metric_type_modify(struct nb_cb_modify_args *args)
 	if (!area)
 		return NB_ERR_RESOURCE;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
 	metric_type = yang_dnode_get_enum(args->dnode, NULL);
 
 	switch (args->event) {
@@ -3306,7 +3388,7 @@ int isis_instance_flex_algo_priority_modify(struct nb_cb_modify_args *args)
 	if (!area)
 		return NB_ERR_RESOURCE;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
 	priority = yang_dnode_get_uint32(args->dnode, NULL);
 
 	switch (args->event) {
@@ -3342,7 +3424,7 @@ int isis_instance_flex_algo_priority_destroy(struct nb_cb_destroy_args *args)
 	if (!area)
 		return NB_ERR_RESOURCE;
 
-	algorithm = yang_dnode_get_uint32(args->dnode, "./../flex-algo");
+	algorithm = yang_dnode_get_uint32(args->dnode, "../flex-algo");
 	priority = yang_dnode_get_uint32(args->dnode, NULL);
 
 	switch (args->event) {
@@ -3361,6 +3443,230 @@ int isis_instance_flex_algo_priority_destroy(struct nb_cb_destroy_args *args)
 	case NB_EV_ABORT:
 		break;
 	}
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/segment-routing-srv6/enabled
+ */
+int isis_instance_segment_routing_srv6_enabled_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->srv6db.config.enabled = yang_dnode_get_bool(args->dnode, NULL);
+
+	if (area->srv6db.config.enabled) {
+		if (IS_DEBUG_EVENTS)
+			zlog_debug(
+				"Segment Routing over IPv6 (SRv6): OFF -> ON");
+	} else {
+		if (IS_DEBUG_EVENTS)
+			zlog_debug(
+				"Segment Routing over IPv6 (SRv6): ON -> OFF");
+	}
+
+	/* Regenerate LSPs to advertise SRv6 capabilities or signal that the
+	 * node is no longer SRv6-capable. */
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/segment-routing-srv6/locator
+ */
+int isis_instance_segment_routing_srv6_locator_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	const char *loc_name;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(lyd_parent(lyd_parent(args->dnode)), NULL,
+				    true);
+
+	loc_name = yang_dnode_get_string(args->dnode, NULL);
+
+	if (strncmp(loc_name, area->srv6db.config.srv6_locator_name,
+		    sizeof(area->srv6db.config.srv6_locator_name)) == 0) {
+		snprintf(args->errmsg, args->errmsg_len,
+			 "SRv6 locator %s is already configured", loc_name);
+		return NB_ERR_NO_CHANGES;
+	}
+
+	/* Remove previously configured locator */
+	if (strncmp(area->srv6db.config.srv6_locator_name, "",
+		    sizeof(area->srv6db.config.srv6_locator_name)) != 0) {
+		sr_debug("Unsetting previously configured SRv6 locator");
+		if (!isis_srv6_locator_unset(area)) {
+			zlog_warn("Failed to unset SRv6 locator");
+			return NB_ERR;
+		}
+	}
+
+	strlcpy(area->srv6db.config.srv6_locator_name, loc_name,
+		sizeof(area->srv6db.config.srv6_locator_name));
+
+	sr_debug("Configured SRv6 locator %s for IS-IS area %s", loc_name,
+		 area->area_tag);
+
+	sr_debug("Trying to get a chunk from locator %s for IS-IS area %s",
+		 loc_name, area->area_tag);
+
+	if (isis_zebra_srv6_manager_get_locator_chunk(loc_name) < 0)
+		return NB_ERR;
+
+	return NB_OK;
+}
+
+int isis_instance_segment_routing_srv6_locator_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	struct isis_area *area;
+	const char *loc_name;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(lyd_parent(lyd_parent(args->dnode)), NULL,
+				    true);
+
+	loc_name = yang_dnode_get_string(args->dnode, NULL);
+
+	sr_debug("Trying to unset SRv6 locator %s", loc_name);
+
+	if (strncmp(loc_name, area->srv6db.config.srv6_locator_name,
+		    sizeof(area->srv6db.config.srv6_locator_name)) != 0) {
+		sr_debug("SRv6 locator %s is not configured", loc_name);
+		snprintf(args->errmsg, args->errmsg_len,
+			 "SRv6 locator %s is not configured", loc_name);
+		return NB_ERR_NO_CHANGES;
+	}
+
+	if (!isis_srv6_locator_unset(area)) {
+		zlog_warn("Failed to unset SRv6 locator");
+		return NB_ERR;
+	}
+
+	sr_debug("Deleted SRv6 locator %s for IS-IS area %s", loc_name,
+		 area->area_tag);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/segment-routing-srv6/msd/node-msd/max-segs-left
+ */
+int isis_instance_segment_routing_srv6_msd_node_msd_max_segs_left_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->srv6db.config.max_seg_left_msd = yang_dnode_get_uint8(args->dnode,
+								    NULL);
+
+	/* Update and regenerate LSP */
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/segment-routing-srv6/msd/node-msd/max-end-pop
+ */
+int isis_instance_segment_routing_srv6_msd_node_msd_max_end_pop_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->srv6db.config.max_end_pop_msd = yang_dnode_get_uint8(args->dnode,
+								   NULL);
+
+	/* Update and regenerate LSP */
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/segment-routing-srv6/msd/node-msd/max-h-encaps
+ */
+int isis_instance_segment_routing_srv6_msd_node_msd_max_h_encaps_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->srv6db.config.max_h_encaps_msd = yang_dnode_get_uint8(args->dnode,
+								    NULL);
+
+	/* Update and regenerate LSP */
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/segment-routing-srv6/msd/node-msd/max-end-d
+ */
+int isis_instance_segment_routing_srv6_msd_node_msd_max_end_d_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(args->dnode, NULL, true);
+	area->srv6db.config.max_end_d_msd = yang_dnode_get_uint8(args->dnode,
+								 NULL);
+
+	/* Update and regenerate LSP */
+	lsp_regenerate_schedule(area, area->is_type, 0);
+
+	return NB_OK;
+}
+
+/*
+ * XPath: /frr-isisd:isis/instance/segment-routing-srv6/interface
+ */
+int isis_instance_segment_routing_srv6_interface_modify(
+	struct nb_cb_modify_args *args)
+{
+	struct isis_area *area;
+	const char *ifname;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	area = nb_running_get_entry(lyd_parent(lyd_parent(args->dnode)), NULL,
+				    true);
+
+	ifname = yang_dnode_get_string(args->dnode, NULL);
+
+	sr_debug("Changing SRv6 interface for IS-IS area %s to %s",
+		 area->area_tag, ifname);
+
+	isis_srv6_interface_set(area, ifname);
 
 	return NB_OK;
 }
@@ -3448,7 +3754,7 @@ int lib_interface_isis_create(struct nb_cb_create_args *args)
 {
 	struct interface *ifp;
 	struct isis_circuit *circuit = NULL;
-	const char *area_tag = yang_dnode_get_string(args->dnode, "./area-tag");
+	const char *area_tag = yang_dnode_get_string(args->dnode, "area-tag");
 
 	switch (args->event) {
 	case NB_EV_PREPARE:

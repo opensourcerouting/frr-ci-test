@@ -358,6 +358,8 @@ BGP
   :t:`Outbound Route Filtering Capability. E. Chen, Y. Rekhter. August 2008.`
 - :rfc:`5292`
   :t:`Address-Prefix-Based Outbound Route Filter for BGP-4. E. Chen, S. Sangli. August 2008.`
+- :rfc:`5396`
+  :t:`Textual Representation of Autonomous System (AS) Numbers. G. Michaelson, G. Huston. December 2008.`
 - :rfc:`5492`
   :t:`Capabilities Advertisement with BGP-4. J. Scudder, R. Chandra. February 2009.`
 - :rfc:`5575`
@@ -426,6 +428,8 @@ BGP
   :t:`Route Leak Prevention and Detection Using Roles in UPDATE and OPEN Messages. A. Azimov, E. Bogomazov, R. Bush, K. Patel, K. Sriram. May 2022.`
 - :rfc:`9384`
   :t:`A BGP Cease NOTIFICATION Subcode for Bidirectional Forwarding Detection (BFD). J. Haas. March 2023.`
+- :rfc:`9494`
+  :t:`Long-Lived Graceful Restart for BGP. J. Uttaro, E. Chen, B. Decraene, J. Scudder. November 2023.`
 
 OSPF
 ----

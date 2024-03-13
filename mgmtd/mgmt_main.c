@@ -22,10 +22,10 @@ static const struct option longopts[] = {
 	{"skip_runas", no_argument, NULL, 'S'},
 	{"no_zebra", no_argument, NULL, 'Z'},
 	{"socket_size", required_argument, NULL, 's'},
+	{"vrfwnetns", no_argument, NULL, 'n'},
 	{0}};
 
 static void mgmt_exit(int);
-static void mgmt_vrf_terminate(void);
 
 /* privileges */
 static zebra_capabilities_t _caps_p[] = {ZCAP_BIND, ZCAP_NET_RAW,
@@ -114,8 +114,6 @@ static __attribute__((__noreturn__)) void mgmt_exit(int status)
 	/* stop pthreads (if any) */
 	frr_pthread_stop_all();
 
-	mgmt_vrf_terminate();
-
 	frr_fini();
 	exit(status);
 }
@@ -139,58 +137,37 @@ static struct frr_signal_t mgmt_signals[] = {
 	},
 };
 
-static int mgmt_vrf_new(struct vrf *vrf)
-{
-	zlog_debug("VRF Created: %s(%u)", vrf->name, vrf->vrf_id);
+#ifdef HAVE_STATICD
+extern const struct frr_yang_module_info frr_staticd_info;
+#endif
 
-	return 0;
-}
 
-static int mgmt_vrf_delete(struct vrf *vrf)
-{
-	zlog_debug("VRF Deletion: %s(%u)", vrf->name, vrf->vrf_id);
+/*
+ * These are stub info structs that are used to load the modules used by backend
+ * clients into mgmtd. The modules are used by libyang in order to support
+ * parsing binary data returns from the backend.
+ */
+const struct frr_yang_module_info zebra_info = {
+	.name = "frr-zebra",
+	.ignore_cfg_cbs = true,
+	.nodes = { { .xpath = NULL } },
+};
 
-	return 0;
-}
+const struct frr_yang_module_info affinity_map_info = {
+	.name = "frr-affinity-map",
+	.ignore_cfg_cbs = true,
+	.nodes = { { .xpath = NULL } },
+};
 
-static int mgmt_vrf_enable(struct vrf *vrf)
-{
-	zlog_debug("VRF Enable: %s(%u)", vrf->name, vrf->vrf_id);
-
-	return 0;
-}
-
-static int mgmt_vrf_disable(struct vrf *vrf)
-{
-	zlog_debug("VRF Disable: %s(%u)", vrf->name, vrf->vrf_id);
-
-	/* Note: This is a callback, the VRF will be deleted by the caller. */
-	return 0;
-}
-
-static int mgmt_vrf_config_write(struct vty *vty)
-{
-	return 0;
-}
-
-static void mgmt_vrf_init(void)
-{
-	vrf_init(mgmt_vrf_new, mgmt_vrf_enable, mgmt_vrf_disable,
-		 mgmt_vrf_delete);
-	vrf_cmd_init(mgmt_vrf_config_write);
-}
-
-static void mgmt_vrf_terminate(void)
-{
-	vrf_terminate();
-}
+const struct frr_yang_module_info zebra_route_map_info = {
+	.name = "frr-zebra-route-map",
+	.ignore_cfg_cbs = true,
+	.nodes = { { .xpath = NULL } },
+};
 
 /*
  * List of YANG modules to be loaded in the process context of
  * MGMTd.
- *
- * NOTE: In future this will also include the YANG modules of
- * all individual Backend clients.
  */
 static const struct frr_yang_module_info *const mgmt_yang_modules[] = {
 	&frr_filter_info,
@@ -198,14 +175,17 @@ static const struct frr_yang_module_info *const mgmt_yang_modules[] = {
 	&frr_route_map_info,
 	&frr_routing_info,
 	&frr_vrf_info,
-/*
- * YANG module info supported by backend clients get added here.
- * NOTE: Always set .ignore_cbs true for to avoid validating
- * backend northbound callbacks during loading.
- */
+
+	/*
+	 * YANG module info used by backend clients get added here.
+	 */
+
+	&zebra_info,
+	&affinity_map_info,
+	&zebra_route_map_info,
+
 #ifdef HAVE_STATICD
-	&(struct frr_yang_module_info){.name = "frr-staticd",
-				       .ignore_cbs = true},
+	&frr_staticd_info,
 #endif
 };
 
@@ -258,6 +238,9 @@ int main(int argc, char **argv)
 		case 's':
 			buffer_size = atoi(optarg);
 			break;
+		case 'n':
+			vrf_configure_backend(VRF_BACKEND_NETNS);
+			break;
 		default:
 			frr_help_exit(1);
 			break;
@@ -267,8 +250,11 @@ int main(int argc, char **argv)
 	/* MGMTD master init. */
 	mgmt_master_init(frr_init(), buffer_size);
 
-	/* VRF Initializations. */
-	mgmt_vrf_init();
+	/* VRF commands initialization. */
+	vrf_cmd_init(NULL);
+
+	/* Interface commands initialization. */
+	if_cmd_init(NULL);
 
 	/* MGMTD related initialization.  */
 	mgmt_init();

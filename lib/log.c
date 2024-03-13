@@ -8,6 +8,10 @@
 
 #include <zebra.h>
 
+#ifdef HAVE_GLIBC_BACKTRACE
+#include <execinfo.h>
+#endif /* HAVE_GLIBC_BACKTRACE */
+
 #include "zclient.h"
 #include "log.h"
 #include "memory.h"
@@ -351,7 +355,6 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_VRF_ADD),
 	DESC_ENTRY(ZEBRA_VRF_DELETE),
 	DESC_ENTRY(ZEBRA_VRF_LABEL),
-	DESC_ENTRY(ZEBRA_INTERFACE_VRF_UPDATE),
 	DESC_ENTRY(ZEBRA_BFD_CLIENT_REGISTER),
 	DESC_ENTRY(ZEBRA_BFD_CLIENT_DEREGISTER),
 	DESC_ENTRY(ZEBRA_INTERFACE_ENABLE_RADV),
@@ -457,7 +460,9 @@ static const struct zebra_desc_table command_types[] = {
 	DESC_ENTRY(ZEBRA_TC_CLASS_ADD),
 	DESC_ENTRY(ZEBRA_TC_CLASS_DELETE),
 	DESC_ENTRY(ZEBRA_TC_FILTER_ADD),
-	DESC_ENTRY(ZEBRA_TC_FILTER_DELETE)};
+	DESC_ENTRY(ZEBRA_TC_FILTER_DELETE),
+	DESC_ENTRY(ZEBRA_OPAQUE_NOTIFY)
+};
 #undef DESC_ENTRY
 
 static const struct zebra_desc_table unknown = {0, "unknown", '?'};
@@ -546,6 +551,8 @@ int proto_redistnum(int afi, const char *s)
 			return ZEBRA_ROUTE_KERNEL;
 		else if (strmatch(s, "connected"))
 			return ZEBRA_ROUTE_CONNECT;
+		else if (strmatch(s, "local"))
+			return ZEBRA_ROUTE_LOCAL;
 		else if (strmatch(s, "static"))
 			return ZEBRA_ROUTE_STATIC;
 		else if (strmatch(s, "rip"))
@@ -572,12 +579,16 @@ int proto_redistnum(int afi, const char *s)
 			return ZEBRA_ROUTE_SHARP;
 		else if (strmatch(s, "openfabric"))
 			return ZEBRA_ROUTE_OPENFABRIC;
+		else if (strmatch(s, "table-direct"))
+			return ZEBRA_ROUTE_TABLE_DIRECT;
 	}
 	if (afi == AFI_IP6) {
 		if (strmatch(s, "kernel"))
 			return ZEBRA_ROUTE_KERNEL;
 		else if (strmatch(s, "connected"))
 			return ZEBRA_ROUTE_CONNECT;
+		else if (strmatch(s, "local"))
+			return ZEBRA_ROUTE_LOCAL;
 		else if (strmatch(s, "static"))
 			return ZEBRA_ROUTE_STATIC;
 		else if (strmatch(s, "ripng"))
@@ -602,6 +613,8 @@ int proto_redistnum(int afi, const char *s)
 			return ZEBRA_ROUTE_SHARP;
 		else if (strmatch(s, "openfabric"))
 			return ZEBRA_ROUTE_OPENFABRIC;
+		else if (strmatch(s, "table-direct"))
+			return ZEBRA_ROUTE_TABLE_DIRECT;
 	}
 	return -1;
 }

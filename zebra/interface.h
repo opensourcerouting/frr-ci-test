@@ -39,7 +39,6 @@ enum zebra_iftype {
 	ZEBRA_IF_MACVLAN,   /* MAC VLAN interface*/
 	ZEBRA_IF_VETH,      /* VETH interface*/
 	ZEBRA_IF_BOND,	    /* Bond */
-	ZEBRA_IF_BOND_SLAVE,	    /* Bond */
 	ZEBRA_IF_GRE,      /* GRE interface */
 };
 
@@ -113,6 +112,9 @@ struct zebra_if {
 
 	/* MPLS status. */
 	bool mpls;
+
+	/* MPLS configuration */
+	uint8_t mpls_config;
 
 	/* Linkdown status */
 	bool linkdown, linkdownv6;
@@ -281,7 +283,6 @@ extern void if_refresh(struct interface *);
 extern void if_flags_update(struct interface *, uint64_t);
 extern int if_subnet_add(struct interface *, struct connected *);
 extern int if_subnet_delete(struct interface *, struct connected *);
-extern int ipv6_address_configured(struct interface *ifp);
 extern void if_handle_vrf_change(struct interface *ifp, vrf_id_t vrf_id);
 extern void zebra_if_update_link(struct interface *ifp, ifindex_t link_ifindex,
 				 ns_id_t ns_id);

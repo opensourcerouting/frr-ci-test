@@ -247,13 +247,11 @@ static bool route_add(const struct prefix *p, vrf_id_t vrf_id, uint8_t instance,
 	memcpy(&api.prefix, p, sizeof(*p));
 
 	api.flags = flags;
-	SET_FLAG(api.flags, ZEBRA_FLAG_ALLOW_RECURSION);
 	SET_FLAG(api.message, ZAPI_MESSAGE_NEXTHOP);
 
 	/* Only send via ID if nhgroup has been successfully installed */
 	if (nhgid && sharp_nhgroup_id_is_installed(nhgid)) {
-		SET_FLAG(api.message, ZAPI_MESSAGE_NHG);
-		api.nhgid = nhgid;
+		zapi_route_set_nhg_id(&api, &nhgid);
 	} else {
 		for (ALL_NEXTHOPS_PTR(nhg, nh)) {
 			/* Check if we set a VNI label */
@@ -513,6 +511,7 @@ static int route_notify_owner(ZAPI_CALLBACK_ARGS)
 
 static void zebra_connected(struct zclient *zclient)
 {
+	zebra_route_notify_send(ZEBRA_ROUTE_NOTIFY_REQUEST, zclient, true);
 	zclient_send_reg_requests(zclient, VRF_DEFAULT);
 
 	/*
@@ -563,6 +562,12 @@ void nhg_add(uint32_t id, const struct nexthop_group *nhg,
 	}
 
 	if (api_nhg.nexthop_num == 0) {
+		if (sharp_nhgroup_id_is_installed(id)) {
+			zlog_debug("%s: nhg %u: no nexthops, deleting nexthop group", __func__,
+				   id);
+			zclient_nhg_send(zclient, ZEBRA_NHG_DEL, &api_nhg);
+			return;
+		}
 		zlog_debug("%s: nhg %u not sent: no valid nexthops", __func__,
 			   id);
 		is_valid = false;
@@ -667,27 +672,20 @@ static int sharp_debug_nexthops(struct zapi_route *api)
 
 	return i;
 }
-static int sharp_nexthop_update(ZAPI_CALLBACK_ARGS)
+
+static void sharp_nexthop_update(struct vrf *vrf, struct prefix *matched,
+				 struct zapi_route *nhr)
 {
 	struct sharp_nh_tracker *nht;
-	struct zapi_route nhr;
-	struct prefix matched;
-
-	if (!zapi_nexthop_update_decode(zclient->ibuf, &matched, &nhr)) {
-		zlog_err("%s: Decode of update failed", __func__);
-		return 0;
-	}
 
 	zlog_debug("Received update for %pFX actual match: %pFX metric: %u",
-		   &matched, &nhr.prefix, nhr.metric);
+		   matched, &nhr->prefix, nhr->metric);
 
-	nht = sharp_nh_tracker_get(&matched);
-	nht->nhop_num = nhr.nexthop_num;
+	nht = sharp_nh_tracker_get(matched);
+	nht->nhop_num = nhr->nexthop_num;
 	nht->updates++;
 
-	sharp_debug_nexthops(&nhr);
-
-	return 0;
+	sharp_debug_nexthops(nhr);
 }
 
 static int sharp_redistribute_route(ZAPI_CALLBACK_ARGS)
@@ -805,6 +803,28 @@ static int sharp_opaque_handler(ZAPI_CALLBACK_ARGS)
 	return 0;
 }
 
+/* Handler for opaque notification messages */
+static int sharp_opq_notify_handler(ZAPI_CALLBACK_ARGS)
+{
+	struct stream *s;
+	struct zapi_opaque_notif_info info;
+
+	s = zclient->ibuf;
+
+	if (zclient_opaque_notif_decode(s, &info) != 0)
+		return -1;
+
+	if (info.reg)
+		zlog_debug("%s: received opaque notification REG, type %u => %d/%d/%d",
+			   __func__, info.msg_type, info.proto, info.instance,
+			   info.session_id);
+	else
+		zlog_debug("%s: received opaque notification UNREG, type %u",
+			   __func__, info.msg_type);
+
+	return 0;
+}
+
 /*
  * Send OPAQUE messages, using subtype 'type'.
  */
@@ -838,6 +858,17 @@ void sharp_opaque_send(uint32_t type, uint32_t proto, uint32_t instance,
 			break;
 		}
 	}
+}
+
+/*
+ * Register/unregister for opaque notifications from zebra about 'type'.
+ */
+void sharp_zebra_opaque_notif_reg(bool is_reg, uint32_t type)
+{
+	if (is_reg)
+		zclient_opaque_request_notify(zclient, type);
+	else
+		zclient_opaque_drop_notify(zclient, type);
 }
 
 /*
@@ -902,6 +933,7 @@ static int nhg_notify_owner(ZAPI_CALLBACK_ARGS)
 		zlog_debug("Failed install of nhg %u", id);
 		break;
 	case ZAPI_NHG_REMOVED:
+		sharp_nhgroup_id_set_installed(id, false);
 		zlog_debug("Removed nhg %u", id);
 		break;
 	case ZAPI_NHG_REMOVE_FAIL:
@@ -1031,26 +1063,41 @@ static zclient_handler *const sharp_handlers[] = {
 	[ZEBRA_INTERFACE_ADDRESS_ADD] = interface_address_add,
 	[ZEBRA_INTERFACE_ADDRESS_DELETE] = interface_address_delete,
 	[ZEBRA_ROUTE_NOTIFY_OWNER] = route_notify_owner,
-	[ZEBRA_NEXTHOP_UPDATE] = sharp_nexthop_update,
 	[ZEBRA_NHG_NOTIFY_OWNER] = nhg_notify_owner,
 	[ZEBRA_REDISTRIBUTE_ROUTE_ADD] = sharp_redistribute_route,
 	[ZEBRA_REDISTRIBUTE_ROUTE_DEL] = sharp_redistribute_route,
 	[ZEBRA_OPAQUE_MESSAGE] = sharp_opaque_handler,
+	[ZEBRA_OPAQUE_NOTIFY] = sharp_opq_notify_handler,
 	[ZEBRA_SRV6_MANAGER_GET_LOCATOR_CHUNK] =
 		sharp_zebra_process_srv6_locator_chunk,
 };
 
 void sharp_zebra_init(void)
 {
-	struct zclient_options opt = {.receive_notify = true};
+	hook_register_prio(if_real, 0, sharp_ifp_create);
+	hook_register_prio(if_up, 0, sharp_ifp_up);
+	hook_register_prio(if_down, 0, sharp_ifp_down);
+	hook_register_prio(if_unreal, 0, sharp_ifp_destroy);
 
-	if_zapi_callbacks(sharp_ifp_create, sharp_ifp_up, sharp_ifp_down,
-			  sharp_ifp_destroy);
-
-	zclient = zclient_new(master, &opt, sharp_handlers,
+	zclient = zclient_new(master, &zclient_options_default, sharp_handlers,
 			      array_size(sharp_handlers));
 
 	zclient_init(zclient, ZEBRA_ROUTE_SHARP, 0, &sharp_privs);
 	zclient->zebra_connected = zebra_connected;
 	zclient->zebra_buffer_write_ready = sharp_zclient_buffer_ready;
+	zclient->nexthop_update = sharp_nexthop_update;
+}
+
+void sharp_zebra_terminate(void)
+{
+	struct sharp_zclient *node = sharp_clients_head;
+
+	while (node) {
+		sharp_zclient_delete(node->client->session_id);
+
+		node = sharp_clients_head;
+	}
+
+	zclient_stop(zclient);
+	zclient_free(zclient);
 }

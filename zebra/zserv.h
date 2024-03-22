@@ -185,6 +185,9 @@ struct zserv {
 	uint32_t local_es_evi_add_cnt;
 	uint32_t local_es_evi_del_cnt;
 	uint32_t error_cnt;
+	uint32_t nhg_add_cnt;
+	uint32_t nhg_upd8_cnt;
+	uint32_t nhg_del_cnt;
 
 	time_t nh_reg_time;
 	time_t nh_dereg_time;
@@ -237,8 +240,7 @@ DECLARE_HOOK(zserv_client_connect, (struct zserv *client), (client));
 DECLARE_KOOH(zserv_client_close, (struct zserv *client), (client));
 
 #define DYNAMIC_CLIENT_GR_DISABLED(_client)                                    \
-	((_client->proto <= ZEBRA_ROUTE_CONNECT)                               \
-	 || !(_client->gr_instance_count))
+	((_client->proto <= ZEBRA_ROUTE_LOCAL) || !(_client->gr_instance_count))
 
 /*
  * Initialize Zebra API server.

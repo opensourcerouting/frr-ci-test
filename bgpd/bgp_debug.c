@@ -216,6 +216,7 @@ static void bgp_debug_list_free(struct list *list)
 			listnode_delete(list, filter);
 			prefix_free(&filter->p);
 			XFREE(MTYPE_BGP_DEBUG_STR, filter->host);
+			XFREE(MTYPE_BGP_DEBUG_STR, filter->plist_name);
 			XFREE(MTYPE_BGP_DEBUG_FILTER, filter);
 		}
 }
@@ -233,15 +234,21 @@ static void bgp_debug_list_print(struct vty *vty, const char *desc,
 	vty_out(vty, "%s", desc);
 
 	if (list && !list_isempty(list)) {
-		vty_out(vty, " for");
+		vty_out(vty, " for:\n");
 		for (ALL_LIST_ELEMENTS(list, node, nnode, filter)) {
 			if (filter->host)
-				vty_out(vty, " %s", filter->host);
+				vty_out(vty, "   %s", filter->host);
+
+			if (filter->plist_name)
+				vty_out(vty, " with prefix-list %s",
+					filter->plist_name);
 
 			if (filter->p && filter->p->family == AF_EVPN)
 				bgp_debug_print_evpn_prefix(vty, "", filter->p);
 			else if (filter->p)
 				vty_out(vty, " %pFX", filter->p);
+
+			vty_out(vty, "\n");
 		}
 	}
 
@@ -261,7 +268,11 @@ static int bgp_debug_list_conf_print(struct vty *vty, const char *desc,
 
 	if (list && !list_isempty(list)) {
 		for (ALL_LIST_ELEMENTS(list, node, nnode, filter)) {
-			if (filter->host) {
+			if (filter->host && filter->plist_name) {
+				vty_out(vty, "%s %s prefix-list %s\n", desc,
+					filter->host, filter->plist_name);
+				write++;
+			} else if (filter->host) {
 				vty_out(vty, "%s %s\n", desc, filter->host);
 				write++;
 			}
@@ -286,7 +297,8 @@ static int bgp_debug_list_conf_print(struct vty *vty, const char *desc,
 }
 
 static void bgp_debug_list_add_entry(struct list *list, const char *host,
-				     const struct prefix *p)
+				     const struct prefix *p,
+				     const char *plist_name)
 {
 	struct bgp_debug_filter *filter;
 
@@ -295,11 +307,25 @@ static void bgp_debug_list_add_entry(struct list *list, const char *host,
 
 	if (host) {
 		filter->host = XSTRDUP(MTYPE_BGP_DEBUG_STR, host);
+		filter->plist_name = NULL;
+		filter->plist_v4 = NULL;
+		filter->plist_v6 = NULL;
 		filter->p = NULL;
 	} else if (p) {
 		filter->host = NULL;
+		filter->plist_name = NULL;
+		filter->plist_v4 = NULL;
+		filter->plist_v6 = NULL;
 		filter->p = prefix_new();
 		prefix_copy(filter->p, p);
+	}
+
+	if (plist_name) {
+		filter->plist_name = XSTRDUP(MTYPE_BGP_DEBUG_STR, plist_name);
+		filter->plist_v4 = prefix_list_lookup(AFI_IP,
+						      filter->plist_name);
+		filter->plist_v6 = prefix_list_lookup(AFI_IP6,
+						      filter->plist_name);
 	}
 
 	listnode_add(list, filter);
@@ -315,6 +341,7 @@ static bool bgp_debug_list_remove_entry(struct list *list, const char *host,
 		if (host && strcmp(filter->host, host) == 0) {
 			listnode_delete(list, filter);
 			XFREE(MTYPE_BGP_DEBUG_STR, filter->host);
+			XFREE(MTYPE_BGP_DEBUG_STR, filter->plist_name);
 			XFREE(MTYPE_BGP_DEBUG_FILTER, filter);
 			return true;
 		} else if (p && filter->p->prefixlen == p->prefixlen
@@ -330,16 +357,20 @@ static bool bgp_debug_list_remove_entry(struct list *list, const char *host,
 }
 
 static bool bgp_debug_list_has_entry(struct list *list, const char *host,
-				     const struct prefix *p)
+				     const struct prefix *p,
+				     const char *plist_name)
 {
 	struct bgp_debug_filter *filter;
 	struct listnode *node, *nnode;
 
 	for (ALL_LIST_ELEMENTS(list, node, nnode, filter)) {
-		if (host) {
-			if (strcmp(filter->host, host) == 0) {
+		if (host && plist_name) {
+			if (strmatch(filter->host, host) && filter->plist_name &&
+			    strmatch(filter->plist_name, plist_name))
 				return true;
-			}
+		} else if (host) {
+			if (strmatch(filter->host, host))
+				return true;
 		} else if (p) {
 			if (filter->p->prefixlen == p->prefixlen
 			    && prefix_match(filter->p, p)) {
@@ -353,7 +384,7 @@ static bool bgp_debug_list_has_entry(struct list *list, const char *host,
 
 bool bgp_debug_peer_updout_enabled(char *host)
 {
-	return (bgp_debug_list_has_entry(bgp_debug_update_out_peers, host,
+	return (bgp_debug_list_has_entry(bgp_debug_update_out_peers, host, NULL,
 					 NULL));
 }
 
@@ -498,12 +529,13 @@ const char *bgp_notify_subcode_str(char code, char subcode)
 const char *bgp_notify_admin_message(char *buf, size_t bufsz, uint8_t *data,
 				     size_t datalen)
 {
+	memset(buf, 0, bufsz);
 	if (!data || datalen < 1)
-		return NULL;
+		return buf;
 
 	uint8_t len = data[0];
 	if (!len || len > datalen - 1)
-		return NULL;
+		return buf;
 
 	return zlog_sanitize(buf, bufsz, data + 1, len);
 }
@@ -779,14 +811,15 @@ DEFUN (debug_bgp_neighbor_events_peer,
 		bgp_debug_neighbor_events_peers = list_new();
 
 	if (bgp_debug_list_has_entry(bgp_debug_neighbor_events_peers, host,
-				     NULL)) {
+				     NULL, NULL)) {
 		vty_out(vty,
 			"BGP neighbor-events debugging is already enabled for %s\n",
 			host);
 		return CMD_SUCCESS;
 	}
 
-	bgp_debug_list_add_entry(bgp_debug_neighbor_events_peers, host, NULL);
+	bgp_debug_list_add_entry(bgp_debug_neighbor_events_peers, host, NULL,
+				 NULL);
 
 	if (vty->node == CONFIG_NODE)
 		DEBUG_ON(neighbor_events, NEIGHBOR_EVENTS);
@@ -926,14 +959,15 @@ DEFUN (debug_bgp_keepalive_peer,
 	if (!bgp_debug_keepalive_peers)
 		bgp_debug_keepalive_peers = list_new();
 
-	if (bgp_debug_list_has_entry(bgp_debug_keepalive_peers, host, NULL)) {
+	if (bgp_debug_list_has_entry(bgp_debug_keepalive_peers, host, NULL,
+				     NULL)) {
 		vty_out(vty,
 			"BGP keepalive debugging is already enabled for %s\n",
 			host);
 		return CMD_SUCCESS;
 	}
 
-	bgp_debug_list_add_entry(bgp_debug_keepalive_peers, host, NULL);
+	bgp_debug_list_add_entry(bgp_debug_keepalive_peers, host, NULL, NULL);
 
 	if (vty->node == CONFIG_NODE)
 		DEBUG_ON(keepalive, KEEPALIVE);
@@ -1014,15 +1048,16 @@ DEFPY (debug_bgp_bestpath_prefix,
 	if (!bgp_debug_bestpath_prefixes)
 		bgp_debug_bestpath_prefixes = list_new();
 
-	if (bgp_debug_list_has_entry(bgp_debug_bestpath_prefixes, NULL,
-				     prefix)) {
+	if (bgp_debug_list_has_entry(bgp_debug_bestpath_prefixes, NULL, prefix,
+				     NULL)) {
 		vty_out(vty,
 			"BGP bestpath debugging is already enabled for %s\n",
 			prefix_str);
 		return CMD_SUCCESS;
 	}
 
-	bgp_debug_list_add_entry(bgp_debug_bestpath_prefixes, NULL, prefix);
+	bgp_debug_list_add_entry(bgp_debug_bestpath_prefixes, NULL, prefix,
+				 NULL);
 
 	if (vty->node == CONFIG_NODE) {
 		DEBUG_ON(bestpath, BESTPATH);
@@ -1115,6 +1150,31 @@ DEFUN (debug_bgp_update,
 	return CMD_SUCCESS;
 }
 
+DEFPY (debug_bgp_update_detail,
+       debug_bgp_update_detail_cmd,
+       "[no] debug bgp updates detail",
+       NO_STR
+       DEBUG_STR
+       BGP_STR
+       "BGP updates\n"
+       "Show detailed information about updates\n")
+{
+	if (vty->node == CONFIG_NODE) {
+		if (no)
+			DEBUG_OFF(update, UPDATE_DETAIL);
+		else
+			DEBUG_ON(update, UPDATE_DETAIL);
+	} else {
+		if (no)
+			TERM_DEBUG_OFF(update, UPDATE_DETAIL);
+		else
+			TERM_DEBUG_ON(update, UPDATE_DETAIL);
+		vty_out(vty, "BGP updates detail debugging is on\n");
+	}
+
+	return CMD_SUCCESS;
+}
+
 DEFUN (debug_bgp_update_direct,
        debug_bgp_update_direct_cmd,
        "debug bgp updates <in|out>",
@@ -1149,9 +1209,9 @@ DEFUN (debug_bgp_update_direct,
 	return CMD_SUCCESS;
 }
 
-DEFUN (debug_bgp_update_direct_peer,
+DEFPY (debug_bgp_update_direct_peer,
        debug_bgp_update_direct_peer_cmd,
-       "debug bgp updates <in|out> <A.B.C.D|X:X::X:X|WORD>",
+       "debug bgp updates <in|out> <A.B.C.D|X:X::X:X|WORD> [prefix-list PREFIXLIST_NAME$plist]",
        DEBUG_STR
        BGP_STR
        "BGP updates\n"
@@ -1159,7 +1219,9 @@ DEFUN (debug_bgp_update_direct_peer,
        "Outbound updates\n"
        "BGP neighbor IP address to debug\n"
        "BGP IPv6 neighbor to debug\n"
-       "BGP neighbor on interface to debug\n")
+       "BGP neighbor on interface to debug\n"
+       "Use prefix-list to filter prefixes to debug\n"
+       "Name of prefix-list\n")
 {
 	int idx_in_out = 3;
 	int idx_peer = 4;
@@ -1179,7 +1241,7 @@ DEFUN (debug_bgp_update_direct_peer,
 
 	if (inbound) {
 		if (bgp_debug_list_has_entry(bgp_debug_update_in_peers, host,
-					     NULL)) {
+					     NULL, plist)) {
 			vty_out(vty,
 				"BGP inbound update debugging is already enabled for %s\n",
 				host);
@@ -1189,7 +1251,7 @@ DEFUN (debug_bgp_update_direct_peer,
 
 	else {
 		if (bgp_debug_list_has_entry(bgp_debug_update_out_peers, host,
-					     NULL)) {
+					     NULL, plist)) {
 			vty_out(vty,
 				"BGP outbound update debugging is already enabled for %s\n",
 				host);
@@ -1198,14 +1260,15 @@ DEFUN (debug_bgp_update_direct_peer,
 	}
 
 	if (inbound)
-		bgp_debug_list_add_entry(bgp_debug_update_in_peers, host, NULL);
+		bgp_debug_list_add_entry(bgp_debug_update_in_peers, host, NULL,
+					 plist);
 	else {
 		struct peer *peer;
 		struct peer_af *paf;
 		int afidx;
 
-		bgp_debug_list_add_entry(bgp_debug_update_out_peers, host,
-					 NULL);
+		bgp_debug_list_add_entry(bgp_debug_update_out_peers, host, NULL,
+					 plist);
 		peer = bgp_find_peer(vty, host);
 
 		if (peer) {
@@ -1282,7 +1345,7 @@ DEFUN (no_debug_bgp_update_direct,
 
 DEFUN (no_debug_bgp_update_direct_peer,
        no_debug_bgp_update_direct_peer_cmd,
-       "no debug bgp updates <in|out> <A.B.C.D|X:X::X:X|WORD>",
+       "no debug bgp updates <in|out> <A.B.C.D|X:X::X:X|WORD> [prefix-list PREFIXLIST_NAME]",
        NO_STR
        DEBUG_STR
        BGP_STR
@@ -1291,7 +1354,9 @@ DEFUN (no_debug_bgp_update_direct_peer,
        "Outbound updates\n"
        "BGP neighbor IP address to debug\n"
        "BGP IPv6 neighbor to debug\n"
-       "BGP neighbor on interface to debug\n")
+       "BGP neighbor on interface to debug\n"
+       "Use prefix-list to filter prefixes to debug\n"
+       "Name of prefix-list\n")
 {
 	int idx_in_out = 4;
 	int idx_peer = 5;
@@ -1413,15 +1478,15 @@ DEFPY (debug_bgp_update_prefix_afi_safi,
 	if (!bgp_debug_update_prefixes)
 		bgp_debug_update_prefixes = list_new();
 
-	if (bgp_debug_list_has_entry(bgp_debug_update_prefixes, NULL,
-				     &argv_p)) {
+	if (bgp_debug_list_has_entry(bgp_debug_update_prefixes, NULL, &argv_p,
+				     NULL)) {
 		vty_out(vty,
 			"BGP updates debugging is already enabled for %pFX\n",
 			&argv_p);
 		return CMD_SUCCESS;
 	}
 
-	bgp_debug_list_add_entry(bgp_debug_update_prefixes, NULL, &argv_p);
+	bgp_debug_list_add_entry(bgp_debug_update_prefixes, NULL, &argv_p, NULL);
 
 	if (vty->node == CONFIG_NODE) {
 		DEBUG_ON(update, UPDATE_PREFIX);
@@ -1509,14 +1574,15 @@ DEFPY (debug_bgp_update_prefix,
 	if (!bgp_debug_update_prefixes)
 		bgp_debug_update_prefixes = list_new();
 
-	if (bgp_debug_list_has_entry(bgp_debug_update_prefixes, NULL, prefix)) {
+	if (bgp_debug_list_has_entry(bgp_debug_update_prefixes, NULL, prefix,
+				     NULL)) {
 		vty_out(vty,
 			"BGP updates debugging is already enabled for %s\n",
 			prefix_str);
 		return CMD_SUCCESS;
 	}
 
-	bgp_debug_list_add_entry(bgp_debug_update_prefixes, NULL, prefix);
+	bgp_debug_list_add_entry(bgp_debug_update_prefixes, NULL, prefix, NULL);
 
 	if (vty->node == CONFIG_NODE) {
 		DEBUG_ON(update, UPDATE_PREFIX);
@@ -1646,13 +1712,14 @@ DEFPY (debug_bgp_zebra_prefix,
 	if (!bgp_debug_zebra_prefixes)
 		bgp_debug_zebra_prefixes = list_new();
 
-	if (bgp_debug_list_has_entry(bgp_debug_zebra_prefixes, NULL, prefix)) {
+	if (bgp_debug_list_has_entry(bgp_debug_zebra_prefixes, NULL, prefix,
+				     NULL)) {
 		vty_out(vty, "BGP zebra debugging is already enabled for %s\n",
 			prefix_str);
 		return CMD_SUCCESS;
 	}
 
-	bgp_debug_list_add_entry(bgp_debug_zebra_prefixes, NULL, prefix);
+	bgp_debug_list_add_entry(bgp_debug_zebra_prefixes, NULL, prefix, NULL);
 
 	if (vty->node == CONFIG_NODE)
 		DEBUG_ON(zebra, ZEBRA);
@@ -2264,6 +2331,11 @@ static int bgp_config_write_debug(struct vty *vty)
 						   bgp_debug_update_out_peers);
 	}
 
+	if (CONF_BGP_DEBUG(update, UPDATE_DETAIL)) {
+		vty_out(vty, "debug bgp updates detail\n");
+		write++;
+	}
+
 	if (CONF_BGP_DEBUG(zebra, ZEBRA)) {
 		if (!bgp_debug_zebra_prefixes
 		    || list_isempty(bgp_debug_zebra_prefixes)) {
@@ -2369,6 +2441,8 @@ void bgp_debug_init(void)
 	install_element(CONFIG_NODE, &debug_bgp_keepalive_cmd);
 	install_element(ENABLE_NODE, &debug_bgp_update_cmd);
 	install_element(CONFIG_NODE, &debug_bgp_update_cmd);
+	install_element(ENABLE_NODE, &debug_bgp_update_detail_cmd);
+	install_element(CONFIG_NODE, &debug_bgp_update_detail_cmd);
 	install_element(ENABLE_NODE, &debug_bgp_zebra_cmd);
 	install_element(CONFIG_NODE, &debug_bgp_zebra_cmd);
 	install_element(ENABLE_NODE, &debug_bgp_update_groups_cmd);
@@ -2509,7 +2583,8 @@ static int bgp_debug_per_prefix(const struct prefix *p,
 /* Return true if this peer is on the per_peer_list of peers to debug
  * for BGP_DEBUG_TYPE
  */
-static bool bgp_debug_per_peer(char *host, unsigned long term_bgp_debug_type,
+static bool bgp_debug_per_peer(char *host, const struct prefix *p,
+			       unsigned long term_bgp_debug_type,
 			       unsigned int BGP_DEBUG_TYPE,
 			       struct list *per_peer_list)
 {
@@ -2521,17 +2596,28 @@ static bool bgp_debug_per_peer(char *host, unsigned long term_bgp_debug_type,
 		if (!per_peer_list || list_isempty(per_peer_list))
 			return true;
 
-		else {
-			if (!host)
-				return false;
-
-			for (ALL_LIST_ELEMENTS(per_peer_list, node, nnode,
-					       filter))
-				if (strcmp(filter->host, host) == 0)
-					return true;
-
+		if (!host)
 			return false;
-		}
+
+		for (ALL_LIST_ELEMENTS(per_peer_list, node, nnode, filter))
+			if (strmatch(filter->host, host) &&
+			    filter->plist_name && p) {
+				struct prefix_list *plist;
+				afi_t afi = family2afi(p->family);
+
+				plist = (afi == AFI_IP) ? filter->plist_v4
+							: filter->plist_v6;
+
+				if (!plist)
+					continue;
+
+				return prefix_list_apply(plist, p) ==
+				       PREFIX_PERMIT;
+			} else if (strmatch(filter->host, host)) {
+				return true;
+			}
+
+		return false;
 	}
 
 	return false;
@@ -2544,7 +2630,7 @@ bool bgp_debug_neighbor_events(const struct peer *peer)
 	if (peer)
 		host = peer->host;
 
-	return bgp_debug_per_peer(host, term_bgp_debug_neighbor_events,
+	return bgp_debug_per_peer(host, NULL, term_bgp_debug_neighbor_events,
 				  BGP_DEBUG_NEIGHBOR_EVENTS,
 				  bgp_debug_neighbor_events_peers);
 }
@@ -2556,7 +2642,7 @@ bool bgp_debug_keepalive(const struct peer *peer)
 	if (peer)
 		host = peer->host;
 
-	return bgp_debug_per_peer(host, term_bgp_debug_keepalive,
+	return bgp_debug_per_peer(host, NULL, term_bgp_debug_keepalive,
 				  BGP_DEBUG_KEEPALIVE,
 				  bgp_debug_keepalive_peers);
 }
@@ -2570,7 +2656,7 @@ bool bgp_debug_update(const struct peer *peer, const struct prefix *p,
 		host = peer->host;
 
 	if (inbound) {
-		if (bgp_debug_per_peer(host, term_bgp_debug_update,
+		if (bgp_debug_per_peer(host, p, term_bgp_debug_update,
 				       BGP_DEBUG_UPDATE_IN,
 				       bgp_debug_update_in_peers))
 			return true;
@@ -2578,7 +2664,7 @@ bool bgp_debug_update(const struct peer *peer, const struct prefix *p,
 
 	/* outbound */
 	else {
-		if (bgp_debug_per_peer(host, term_bgp_debug_update,
+		if (bgp_debug_per_peer(host, p, term_bgp_debug_update,
 				       BGP_DEBUG_UPDATE_OUT,
 				       bgp_debug_update_out_peers))
 			return true;

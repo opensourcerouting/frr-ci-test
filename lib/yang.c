@@ -6,6 +6,7 @@
 
 #include <zebra.h>
 
+#include "darr.h"
 #include "log.h"
 #include "lib_errors.h"
 #include "yang.h"
@@ -250,19 +251,44 @@ void yang_snode_get_path(const struct lysc_node *snode,
 	}
 }
 
-struct lysc_node *yang_find_snode(struct ly_ctx *ly_ctx, const char *xpath,
-				  uint32_t options)
+LY_ERR yang_resolve_snode_xpath(struct ly_ctx *ly_ctx, const char *xpath,
+				struct lysc_node ***snodes, bool *simple)
 {
 	struct lysc_node *snode;
 	struct ly_set *set;
 	LY_ERR err;
 
-	err = lys_find_xpath(ly_native_ctx, NULL, xpath, options, &set);
-	if (err || !set->count)
-		return NULL;
+	/* lys_find_path will not resolve complex xpaths */
+	snode = (struct lysc_node *)lys_find_path(ly_ctx, NULL, xpath, 0);
+	if (snode) {
+		*darr_append(*snodes) = snode;
+		*simple = true;
+		return LY_SUCCESS;
+	}
 
-	snode = set->snodes[0];
+	/* Try again to catch complex query cases */
+	err = lys_find_xpath(ly_native_ctx, NULL, xpath, 0, &set);
+	if (err)
+		return err;
+	if (!set->count) {
+		ly_set_free(set, NULL);
+		return LY_ENOTFOUND;
+	}
+
+	*simple = false;
+	darr_ensure_i(*snodes, set->count - 1);
+	memcpy(*snodes, set->snodes, set->count * sizeof(set->snodes[0]));
 	ly_set_free(set, NULL);
+	return LY_SUCCESS;
+}
+
+
+struct lysc_node *yang_find_snode(struct ly_ctx *ly_ctx, const char *xpath,
+				  uint32_t options)
+{
+	struct lysc_node *snode;
+
+	snode = (struct lysc_node *)lys_find_path(ly_ctx, NULL, xpath, 0);
 
 	return snode;
 }
@@ -370,33 +396,10 @@ unsigned int yang_snode_num_keys(const struct lysc_node *snode)
 	return count;
 }
 
-void yang_dnode_get_path(const struct lyd_node *dnode, char *xpath,
-			 size_t xpath_len)
+char *yang_dnode_get_path(const struct lyd_node *dnode, char *xpath,
+			  size_t xpath_len)
 {
-	lyd_path(dnode, LYD_PATH_STD, xpath, xpath_len);
-}
-
-const char *yang_dnode_get_schema_name(const struct lyd_node *dnode,
-				       const char *xpath_fmt, ...)
-{
-	if (xpath_fmt) {
-		va_list ap;
-		char xpath[XPATH_MAXLEN];
-
-		va_start(ap, xpath_fmt);
-		vsnprintf(xpath, sizeof(xpath), xpath_fmt, ap);
-		va_end(ap);
-
-		dnode = yang_dnode_get(dnode, xpath);
-		if (!dnode) {
-			flog_err(EC_LIB_YANG_DNODE_NOT_FOUND,
-				 "%s: couldn't find %s", __func__, xpath);
-			zlog_backtrace(LOG_ERR);
-			abort();
-		}
-	}
-
-	return dnode->schema->name;
+	return lyd_path(dnode, LYD_PATH_STD, xpath, xpath_len);
 }
 
 struct lyd_node *yang_dnode_get(const struct lyd_node *dnode, const char *xpath)
@@ -680,10 +683,40 @@ static void ly_log_cb(LY_LOG_LEVEL level, const char *msg, const char *path)
 		zlog(priority, "libyang: %s", msg);
 }
 
+static ssize_t yang_print_darr(void *arg, const void *buf, size_t count)
+{
+	uint8_t *dst = darr_append_n(*(uint8_t **)arg, count);
+
+	memcpy(dst, buf, count);
+	return count;
+}
+
+LY_ERR yang_print_tree_append(uint8_t **darr, const struct lyd_node *root,
+			      LYD_FORMAT format, uint32_t options)
+{
+	LY_ERR err;
+
+	err = lyd_print_clb(yang_print_darr, darr, root, format, options);
+	if (err)
+		zlog_err("Failed to save yang tree: %s", ly_last_errmsg());
+	else if (format != LYD_LYB)
+		*darr_append(*darr) = 0;
+	return err;
+}
+
+uint8_t *yang_print_tree(const struct lyd_node *root, LYD_FORMAT format,
+			 uint32_t options)
+{
+	uint8_t *darr = NULL;
+
+	if (yang_print_tree_append(&darr, root, format, options))
+		return NULL;
+	return darr;
+}
+
 const char *yang_print_errors(struct ly_ctx *ly_ctx, char *buf, size_t buf_len)
 {
 	struct ly_err_item *ei;
-	const char *path;
 
 	ei = ly_err_first(ly_ctx);
 	if (!ei)
@@ -691,15 +724,13 @@ const char *yang_print_errors(struct ly_ctx *ly_ctx, char *buf, size_t buf_len)
 
 	strlcpy(buf, "YANG error(s):\n", buf_len);
 	for (; ei; ei = ei->next) {
-		strlcat(buf, " ", buf_len);
+		if (ei->path) {
+			strlcat(buf, " Path: ", buf_len);
+			strlcat(buf, ei->path, buf_len);
+			strlcat(buf, "\n", buf_len);
+		}
+		strlcat(buf, " Error: ", buf_len);
 		strlcat(buf, ei->msg, buf_len);
-		strlcat(buf, "\n", buf_len);
-	}
-
-	path = ly_errpath(ly_ctx);
-	if (path) {
-		strlcat(buf, " YANG path: ", buf_len);
-		strlcat(buf, path, buf_len);
 		strlcat(buf, "\n", buf_len);
 	}
 
@@ -723,6 +754,7 @@ struct ly_ctx *yang_ctx_new_setup(bool embedded_modules, bool explicit_compile)
 {
 	struct ly_ctx *ctx = NULL;
 	const char *yang_models_path = YANG_MODELS_PATH;
+	uint options;
 	LY_ERR err;
 
 	if (access(yang_models_path, R_OK | X_OK)) {
@@ -736,7 +768,7 @@ struct ly_ctx *yang_ctx_new_setup(bool embedded_modules, bool explicit_compile)
 				     YANG_MODELS_PATH);
 	}
 
-	uint options = LY_CTX_NO_YANGLIBRARY | LY_CTX_DISABLE_SEARCHDIR_CWD;
+	options = LY_CTX_NO_YANGLIBRARY | LY_CTX_DISABLE_SEARCHDIR_CWD;
 	if (explicit_compile)
 		options |= LY_CTX_EXPLICIT_COMPILE;
 	err = ly_ctx_new(yang_models_path, options, &ctx);
@@ -926,4 +958,273 @@ uint32_t yang_get_list_elements_count(const struct lyd_node *node)
 		node = node->next;
 	} while (node);
 	return count;
+}
+
+int yang_get_key_preds(char *s, const struct lysc_node *snode,
+		       struct yang_list_keys *keys, ssize_t space)
+{
+	const struct lysc_node_leaf *skey;
+	ssize_t len2, len = 0;
+	ssize_t i = 0;
+
+	LY_FOR_KEYS (snode, skey) {
+		assert(i < keys->num);
+		len2 = snprintf(s + len, space - len, "[%s='%s']", skey->name,
+				keys->key[i]);
+		if (len2 > space - len)
+			len = space;
+		else
+			len += len2;
+		i++;
+	}
+
+	assert(i == keys->num);
+	return i;
+}
+
+int yang_get_node_keys(struct lyd_node *node, struct yang_list_keys *keys)
+{
+	struct lyd_node *child = lyd_child(node);
+
+	keys->num = 0;
+	for (; child && lysc_is_key(child->schema); child = child->next) {
+		const char *value = lyd_get_value(child);
+
+		if (!value)
+			return NB_ERR;
+		strlcpy(keys->key[keys->num], value,
+			sizeof(keys->key[keys->num]));
+		keys->num++;
+	}
+	return NB_OK;
+}
+
+/*
+ * ------------------------
+ * Libyang Future Functions
+ * ------------------------
+ *
+ * All these functions are implemented in libyang versions (perhaps unreleased)
+ * beyond what we require currently so we must supply the functionality.
+ */
+
+/*
+ * Safe to remove after libyang v2.1.xxx is required (.144 has a bug so
+ * something > .144) https://github.com/CESNET/libyang/issues/2149
+ */
+LY_ERR yang_lyd_new_list(struct lyd_node_inner *parent,
+			 const struct lysc_node *snode,
+			 const struct yang_list_keys *list_keys,
+			 struct lyd_node **node)
+{
+#if defined(HAVE_LYD_NEW_LIST3) && 0
+	LY_ERR err;
+	const char *keys[LIST_MAXKEYS];
+
+	assert(list_keys->num <= LIST_MAXKEYS);
+	for (int i = 0; i < list_keys->num; i++)
+		keys[i] = list_keys->key[i];
+
+	err = lyd_new_list3(&parent->node, snode->module, snode->name, keys,
+			    NULL, 0, node);
+	return err;
+#else
+	struct lyd_node *pnode = &parent->node;
+	const char(*keys)[LIST_MAXKEYLEN] = list_keys->key;
+
+	assert(list_keys->num <= 8);
+	switch (list_keys->num) {
+	case 0:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node);
+	case 1:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node, keys[0]);
+	case 2:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node, keys[0], keys[1]);
+	case 3:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node, keys[0], keys[1], keys[2]);
+	case 4:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node, keys[0], keys[1], keys[2], keys[3]);
+	case 5:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node, keys[0], keys[1], keys[2], keys[3],
+				    keys[4]);
+	case 6:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node, keys[0], keys[1], keys[2], keys[3],
+				    keys[4], keys[5]);
+	case 7:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node, keys[0], keys[1], keys[2], keys[3],
+				    keys[4], keys[5], keys[6]);
+	case 8:
+		return lyd_new_list(pnode, snode->module, snode->name, false,
+				    node, keys[0], keys[1], keys[2], keys[3],
+				    keys[4], keys[5], keys[6], keys[7]);
+	}
+	_Static_assert(LIST_MAXKEYS == 8, "max key mismatch in switch unroll");
+	/*NOTREACHED*/
+	return LY_EINVAL;
+#endif
+}
+
+
+/*
+ * Safe to remove after libyang v2.1.144 is required
+ */
+LY_ERR yang_lyd_trim_xpath(struct lyd_node **root, const char *xpath)
+{
+	LY_ERR err;
+#ifdef HAVE_LYD_TRIM_XPATH
+	err = lyd_trim_xpath(root, xpath, NULL);
+	if (err) {
+		flog_err_sys(EC_LIB_LIBYANG,
+			     "cannot obtain specific result for xpath \"%s\": %s",
+			     xpath, yang_ly_strerrcode(err));
+		return err;
+	}
+	return LY_SUCCESS;
+#else
+	struct lyd_node *node;
+	struct lyd_node **remove = NULL;
+	struct ly_set *set = NULL;
+	uint32_t i;
+
+	*root = lyd_first_sibling(*root);
+
+	err = lyd_find_xpath3(NULL, *root, xpath, NULL, &set);
+	if (err) {
+		flog_err_sys(EC_LIB_LIBYANG,
+			     "cannot obtain specific result for xpath \"%s\": %s",
+			     xpath, yang_ly_strerrcode(err));
+		return err;
+	}
+	/*
+	 * Mark keepers and sweep deleting non-keepers.
+	 *
+	 * NOTE: We assume the data-nodes have NULL priv pointers and use that
+	 * for our mark.
+	 */
+
+	/* Mark */
+	for (i = 0; i < set->count; i++) {
+		for (node = set->dnodes[i]; node; node = &node->parent->node) {
+			if (node->priv)
+				break;
+			if (node == set->dnodes[i])
+				node->priv = (void *)2;
+			else
+				node->priv = (void *)1;
+		}
+	}
+
+	darr_ensure_cap(remove, 128);
+	LYD_TREE_DFS_BEGIN (*root, node) {
+		/*
+		 * If this is a direct matching node then include it's subtree
+		 * which won't be marked and would otherwise be removed.
+		 */
+		if (node->priv == (void *)2)
+			LYD_TREE_DFS_continue = 1;
+		else if (!node->priv) {
+			*darr_append(remove) = node;
+			LYD_TREE_DFS_continue = 1;
+		}
+		LYD_TREE_DFS_END(*root, node);
+	}
+	darr_foreach_i (remove, i) {
+		if (remove[i] == *root)
+			*root = (*root)->next;
+		lyd_free_tree(remove[i]);
+	}
+	darr_free(remove);
+
+	if (set)
+		ly_set_free(set, NULL);
+
+	return LY_SUCCESS;
+#endif
+}
+
+/*
+ * Safe to remove after libyang v2.1.128 is required
+ */
+const char *yang_ly_strerrcode(LY_ERR err)
+{
+#ifdef HAVE_LY_STRERRCODE
+	return ly_strerrcode(err);
+#else
+	switch (err) {
+	case LY_SUCCESS:
+		return "ok";
+	case LY_EMEM:
+		return "out of memory";
+	case LY_ESYS:
+		return "system error";
+	case LY_EINVAL:
+		return "invalid value given";
+	case LY_EEXIST:
+		return "item exists";
+	case LY_ENOTFOUND:
+		return "item not found";
+	case LY_EINT:
+		return "operation interrupted";
+	case LY_EVALID:
+		return "validation failed";
+	case LY_EDENIED:
+		return "access denied";
+	case LY_EINCOMPLETE:
+		return "incomplete";
+	case LY_ERECOMPILE:
+		return "compile error";
+	case LY_ENOT:
+		return "not";
+	case LY_EPLUGIN:
+	case LY_EOTHER:
+		return "other";
+	default:
+		return "unknown";
+	}
+#endif
+}
+
+/*
+ * Safe to remove after libyang v2.1.128 is required
+ */
+const char *yang_ly_strvecode(LY_VECODE vecode)
+{
+#ifdef HAVE_LY_STRVECODE
+	return ly_strvecode(vecode);
+#else
+	switch (vecode) {
+	case LYVE_SUCCESS:
+		return "";
+	case LYVE_SYNTAX:
+		return "syntax";
+	case LYVE_SYNTAX_YANG:
+		return "yang-syntax";
+	case LYVE_SYNTAX_YIN:
+		return "yin-syntax";
+	case LYVE_REFERENCE:
+		return "reference";
+	case LYVE_XPATH:
+		return "xpath";
+	case LYVE_SEMANTICS:
+		return "semantics";
+	case LYVE_SYNTAX_XML:
+		return "xml-syntax";
+	case LYVE_SYNTAX_JSON:
+		return "json-syntax";
+	case LYVE_DATA:
+		return "data";
+	case LYVE_OTHER:
+		return "other";
+	default:
+		return "unknown";
+	}
+#endif
 }

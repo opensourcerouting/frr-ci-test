@@ -6,7 +6,11 @@
  */
 
 #include <zebra.h>
+
+#include <signal.h>
+#include <sys/stat.h>
 #include <sys/un.h>
+#include <fcntl.h>
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -218,7 +222,8 @@ bool frr_zclient_addr(struct sockaddr_storage *sa, socklen_t *sa_len,
 			break;
 		case '6':
 			path++;
-		/* fallthrough */
+			af = AF_INET6;
+			break;
 		default:
 			af = AF_INET6;
 			break;

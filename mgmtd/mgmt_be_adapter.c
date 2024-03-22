@@ -8,11 +8,14 @@
  */
 
 #include <zebra.h>
+#include "darr.h"
 #include "frrevent.h"
+#include "frrstr.h"
 #include "sockopt.h"
 #include "network.h"
 #include "libfrr.h"
 #include "mgmt_msg.h"
+#include "mgmt_msg_native.h"
 #include "mgmt_pb.h"
 #include "mgmtd/mgmt.h"
 #include "mgmtd/mgmt_memory.h"
@@ -20,137 +23,79 @@
 #include "mgmtd/mgmt_be_adapter.h"
 
 #define MGMTD_BE_ADAPTER_DBG(fmt, ...)                                         \
-	DEBUGD(&mgmt_debug_be, "BE-ADAPTER: %s:" fmt, __func__, ##__VA_ARGS__)
+	DEBUGD(&mgmt_debug_be, "BE-ADAPTER: %s: " fmt, __func__, ##__VA_ARGS__)
 #define MGMTD_BE_ADAPTER_ERR(fmt, ...)                                         \
 	zlog_err("BE-ADAPTER: %s: ERROR: " fmt, __func__, ##__VA_ARGS__)
 
 #define FOREACH_ADAPTER_IN_LIST(adapter)                                       \
 	frr_each_safe (mgmt_be_adapters, &mgmt_be_adapters, (adapter))
 
-/*
- * Static mapping of YANG XPath regular expressions and
- * the corresponding interested backend clients.
- * NOTE: Thiis is a static mapping defined by all MGMTD
- * backend client modules (for now, till we develop a
- * more dynamic way of creating and updating this map).
- * A running map is created by MGMTD in run-time to
- * handle real-time mapping of YANG xpaths to one or
- * more interested backend client adapters.
- *
- * Please see xpath_map_reg[] in lib/mgmt_be_client.c
- * for the actual map
- */
-struct mgmt_be_xpath_map_init {
-	const char *xpath_regexp;
-	uint subscr_info[MGMTD_BE_CLIENT_ID_MAX];
+/* ---------- */
+/* Client IDs */
+/* ---------- */
+
+const char *mgmt_be_client_names[MGMTD_BE_CLIENT_ID_MAX + 1] = {
+	[MGMTD_BE_CLIENT_ID_ZEBRA] = "zebra",
+#ifdef HAVE_STATICD
+	[MGMTD_BE_CLIENT_ID_STATICD] = "staticd",
+#endif
+	[MGMTD_BE_CLIENT_ID_MAX] = "Unknown/Invalid",
 };
 
+/* ------------- */
+/* XPATH MAPPING */
+/* ------------- */
+
+/*
+ * Mapping of YANG XPath prefixes to their corresponding backend clients.
+ */
 struct mgmt_be_xpath_map {
-	char *xpath_regexp;
-	uint subscr_info[MGMTD_BE_CLIENT_ID_MAX];
+	char *xpath_prefix;
+	uint64_t clients;
 };
-
-struct mgmt_be_client_xpath {
-	const char *xpath;
-	uint subscribed;
-};
-
-struct mgmt_be_client_xpath_map {
-	struct mgmt_be_client_xpath *xpaths;
-	uint nxpaths;
-};
-
-struct mgmt_be_get_adapter_config_params {
-	struct mgmt_be_client_adapter *adapter;
-	struct nb_config_cbs *cfg_chgs;
-	uint32_t seq;
-};
-
-/*
- * Static mapping of YANG XPath regular expressions and
- * the corresponding interested backend clients.
- * NOTE: Thiis is a static mapping defined by all MGMTD
- * backend client modules (for now, till we develop a
- * more dynamic way of creating and updating this map).
- * A running map is created by MGMTD in run-time to
- * handle real-time mapping of YANG xpaths to one or
- * more interested backend client adapters.
- */
-static const struct mgmt_be_xpath_map_init mgmt_xpath_map_init[] = {
-	{
-		.xpath_regexp = "/frr-vrf:lib/*",
-		.subscr_info =
-			{
-#if HAVE_STATICD
-				[MGMTD_BE_CLIENT_ID_STATICD] =
-					MGMT_SUBSCR_VALIDATE_CFG |
-					MGMT_SUBSCR_NOTIFY_CFG,
-#endif
-			},
-	},
-	{
-		.xpath_regexp = "/frr-interface:lib/*",
-		.subscr_info =
-			{
-#if HAVE_STATICD
-				[MGMTD_BE_CLIENT_ID_STATICD] =
-					MGMT_SUBSCR_VALIDATE_CFG |
-					MGMT_SUBSCR_NOTIFY_CFG,
-#endif
-			},
-	},
-
-	{
-		.xpath_regexp =
-			"/frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-staticd:staticd/*",
-		.subscr_info =
-			{
-#if HAVE_STATICD
-				[MGMTD_BE_CLIENT_ID_STATICD] =
-					MGMT_SUBSCR_VALIDATE_CFG |
-					MGMT_SUBSCR_NOTIFY_CFG,
-#endif
-			},
-	},
-};
-
 
 /*
  * Each client gets their own map, but also union all the strings into the
  * above map as well.
  */
 #if HAVE_STATICD
-static struct mgmt_be_client_xpath staticd_xpaths[] = {
-	{
-		.xpath = "/frr-vrf:lib/*",
-		.subscribed = MGMT_SUBSCR_VALIDATE_CFG | MGMT_SUBSCR_NOTIFY_CFG,
-	},
-	{
-		.xpath = "/frr-interface:lib/*",
-		.subscribed = MGMT_SUBSCR_VALIDATE_CFG | MGMT_SUBSCR_NOTIFY_CFG,
-	},
-	{
-		.xpath =
-			"/frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-staticd:staticd/*",
-		.subscribed = MGMT_SUBSCR_VALIDATE_CFG | MGMT_SUBSCR_NOTIFY_CFG,
-	},
+static const char *const staticd_xpaths[] = {
+	"/frr-vrf:lib",
+	"/frr-interface:lib",
+	"/frr-routing:routing/control-plane-protocols/control-plane-protocol/frr-staticd:staticd",
+	NULL,
 };
 #endif
 
-static struct mgmt_be_client_xpath_map
-	mgmt_client_xpaths[MGMTD_BE_CLIENT_ID_MAX] = {
+static const char *const *be_client_xpaths[MGMTD_BE_CLIENT_ID_MAX] = {
+
 #ifdef HAVE_STATICD
-		[MGMTD_BE_CLIENT_ID_STATICD] = {staticd_xpaths,
-						array_size(staticd_xpaths)},
+	[MGMTD_BE_CLIENT_ID_STATICD] = staticd_xpaths,
 #endif
 };
 
-#define MGMTD_BE_MAX_NUM_XPATH_MAP 256
+static const char *const zebra_oper_xpaths[] = {
+	"/frr-interface:lib/interface",
+	"/frr-vrf:lib/vrf/frr-zebra:zebra",
+	"/frr-zebra:zebra",
+	NULL,
+};
 
-/* We would like to have a better ADT than one with O(n)
-   comparisons */
-static struct mgmt_be_xpath_map *mgmt_xpath_map;
-static uint mgmt_num_xpath_maps;
+static const char *const *be_client_oper_xpaths[MGMTD_BE_CLIENT_ID_MAX] = {
+	[MGMTD_BE_CLIENT_ID_ZEBRA] = zebra_oper_xpaths,
+};
+
+/*
+ * We would like to have a better ADT than one with O(n) comparisons
+ *
+ * Perhaps it's possible to sort this array in a way that allows binary search
+ * to find the start, then walk until no possible match can follow? Intuition
+ * says this probably involves exact match/no-match on a stem in the map array
+ * or something like that.
+ */
+
+static struct mgmt_be_xpath_map *be_cfg_xpath_map;
+static struct mgmt_be_xpath_map *be_oper_xpath_map;
 
 static struct event_loop *mgmt_loop;
 static struct msg_server mgmt_be_server = {.fd = -1};
@@ -160,12 +105,33 @@ static struct mgmt_be_adapters_head mgmt_be_adapters;
 static struct mgmt_be_client_adapter
 	*mgmt_be_adapters_by_id[MGMTD_BE_CLIENT_ID_MAX];
 
+
 /* Forward declarations */
 static void
 mgmt_be_adapter_sched_init_event(struct mgmt_be_client_adapter *adapter);
 
-static uint mgmt_be_get_subscr_for_xpath_and_client(
-	const char *xpath, enum mgmt_be_client_id client_id, uint subscr_mask);
+static bool be_is_client_interested(const char *xpath,
+				    enum mgmt_be_client_id id, bool config);
+
+const char *mgmt_be_client_id2name(enum mgmt_be_client_id id)
+{
+	if (id > MGMTD_BE_CLIENT_ID_MAX)
+		return "invalid client id";
+	return mgmt_be_client_names[id];
+}
+
+static enum mgmt_be_client_id mgmt_be_client_name2id(const char *name)
+{
+	enum mgmt_be_client_id id;
+
+	FOREACH_MGMTD_BE_CLIENT_ID (id) {
+		if (!strncmp(mgmt_be_client_names[id], name,
+			     MGMTD_CLIENT_NAME_MAX_LEN))
+			return id;
+	}
+
+	return MGMTD_BE_CLIENT_ID_MAX;
+}
 
 static struct mgmt_be_client_adapter *
 mgmt_be_find_adapter_by_fd(int conn_fd)
@@ -193,161 +159,92 @@ mgmt_be_find_adapter_by_name(const char *name)
 	return NULL;
 }
 
+static void mgmt_register_client_xpath(enum mgmt_be_client_id id,
+				       const char *xpath, bool config)
+{
+	struct mgmt_be_xpath_map **maps, *map;
+
+	maps = config ? &be_cfg_xpath_map : &be_oper_xpath_map;
+
+	darr_foreach_p (*maps, map) {
+		if (!strcmp(xpath, map->xpath_prefix)) {
+			map->clients |= (1u << id);
+			return;
+		}
+	}
+	/* we didn't find a matching entry */
+	map = darr_append(*maps);
+	map->xpath_prefix = XSTRDUP(MTYPE_MGMTD_XPATH, xpath);
+	map->clients = (1ul << id);
+}
+
+/*
+ * initial the combined maps from per client maps
+ */
 static void mgmt_be_xpath_map_init(void)
 {
-	uint i;
+	enum mgmt_be_client_id id;
+	const char *const *init;
 
 	MGMTD_BE_ADAPTER_DBG("Init XPath Maps");
 
-	mgmt_num_xpath_maps = array_size(mgmt_xpath_map_init);
-	mgmt_xpath_map =
-		calloc(1, sizeof(*mgmt_xpath_map) * mgmt_num_xpath_maps);
-	for (i = 0; i < mgmt_num_xpath_maps; i++) {
-		MGMTD_BE_ADAPTER_DBG(" - XPATH: '%s'",
-				     mgmt_xpath_map_init[i].xpath_regexp);
-		mgmt_xpath_map[i].xpath_regexp = XSTRDUP(
-			MTYPE_MGMTD_XPATH, mgmt_xpath_map_init[i].xpath_regexp);
-		memcpy(mgmt_xpath_map[i].subscr_info,
-		       mgmt_xpath_map_init[i].subscr_info,
-		       sizeof(mgmt_xpath_map_init[i].subscr_info));
+	FOREACH_MGMTD_BE_CLIENT_ID (id) {
+		/* Initialize the common config init map */
+		for (init = be_client_xpaths[id]; init && *init; init++) {
+			MGMTD_BE_ADAPTER_DBG(" - CFG XPATH: '%s'", *init);
+			mgmt_register_client_xpath(id, *init, true);
+		}
+
+		/* Initialize the common oper init map */
+		for (init = be_client_oper_xpaths[id]; init && *init; init++) {
+			MGMTD_BE_ADAPTER_DBG(" - OPER XPATH: '%s'", *init);
+			mgmt_register_client_xpath(id, *init, false);
+		}
 	}
-	MGMTD_BE_ADAPTER_DBG("Total XPath Maps: %u", mgmt_num_xpath_maps);
+
+	MGMTD_BE_ADAPTER_DBG("Total Cfg XPath Maps: %u",
+			     darr_len(be_cfg_xpath_map));
+	MGMTD_BE_ADAPTER_DBG("Total Oper XPath Maps: %u",
+			     darr_len(be_oper_xpath_map));
 }
 
 static void mgmt_be_xpath_map_cleanup(void)
 {
-	uint i;
+	struct mgmt_be_xpath_map *map;
 
-	for (i = 0; i < mgmt_num_xpath_maps; i++)
-		XFREE(MTYPE_MGMTD_XPATH, mgmt_xpath_map[i].xpath_regexp);
-	free(mgmt_xpath_map);
+	darr_foreach_p (be_cfg_xpath_map, map)
+		XFREE(MTYPE_MGMTD_XPATH, map->xpath_prefix);
+	darr_free(be_cfg_xpath_map);
+
+	darr_foreach_p (be_oper_xpath_map, map)
+		XFREE(MTYPE_MGMTD_XPATH, map->xpath_prefix);
+	darr_free(be_oper_xpath_map);
 }
 
-static int mgmt_be_eval_regexp_match(const char *xpath_regexp,
-				     const char *xpath)
+
+/*
+ * Check if either path or xpath is a prefix of the other. Before checking the
+ * xpath is converted to a regular path string (e..g, removing key value
+ * specifiers).
+ */
+static bool mgmt_be_xpath_prefix(const char *path, const char *xpath)
 {
-	int match_len = 0, re_indx = 0, xp_indx = 0;
-	int rexp_len, xpath_len;
-	bool match = true, re_wild = false, xp_wild = false;
-	bool delim = false, enter_wild_match = false;
-	char wild_delim = 0;
+	int xc, pc;
 
-	rexp_len = strlen(xpath_regexp);
-	xpath_len = strlen(xpath);
-
-	/*
-	 * Remove the trailing wildcard from the regexp and Xpath.
-	 */
-	if (rexp_len && xpath_regexp[rexp_len-1] == '*')
-		rexp_len--;
-	if (xpath_len && xpath[xpath_len-1] == '*')
-		xpath_len--;
-
-	if (!rexp_len || !xpath_len)
-		return 0;
-
-	for (re_indx = 0, xp_indx = 0;
-	     match && re_indx < rexp_len && xp_indx < xpath_len;) {
-		match = (xpath_regexp[re_indx] == xpath[xp_indx]);
-
-		/*
-		 * Check if we need to enter wildcard matching.
-		 */
-		if (!enter_wild_match && !match &&
-			(xpath_regexp[re_indx] == '*'
-			 || xpath[xp_indx] == '*')) {
-			/*
-			 * Found wildcard
-			 */
-			enter_wild_match =
-				(xpath_regexp[re_indx-1] == '/'
-				 || xpath_regexp[re_indx-1] == '\''
-				 || xpath[xp_indx-1] == '/'
-				 || xpath[xp_indx-1] == '\'');
-			if (enter_wild_match) {
-				if (xpath_regexp[re_indx] == '*') {
-					/*
-					 * Begin RE wildcard match.
-					 */
-					re_wild = true;
-					wild_delim = xpath_regexp[re_indx-1];
-				} else if (xpath[xp_indx] == '*') {
-					/*
-					 * Begin XP wildcard match.
-					 */
-					xp_wild = true;
-					wild_delim = xpath[xp_indx-1];
-				}
-			}
+	while ((xc = *xpath++)) {
+		if (xc == '[') {
+			xpath = frrstr_skip_over_char(xpath, ']');
+			if (!xpath)
+				return false;
+			continue;
 		}
-
-		/*
-		 * Check if we need to exit wildcard matching.
-		 */
-		if (enter_wild_match) {
-			if (re_wild && xpath[xp_indx] == wild_delim) {
-				/*
-				 * End RE wildcard matching.
-				 */
-				re_wild = false;
-				if (re_indx < rexp_len-1)
-					re_indx++;
-				enter_wild_match = false;
-			} else if (xp_wild
-				   && xpath_regexp[re_indx] == wild_delim) {
-				/*
-				 * End XP wildcard matching.
-				 */
-				xp_wild = false;
-				if (xp_indx < xpath_len-1)
-					xp_indx++;
-				enter_wild_match = false;
-			}
-		}
-
-		match = (xp_wild || re_wild
-			 || xpath_regexp[re_indx] == xpath[xp_indx]);
-
-		/*
-		 * Check if we found a delimiter in both the Xpaths
-		 */
-		if ((xpath_regexp[re_indx] == '/'
-			&& xpath[xp_indx] == '/')
-			|| (xpath_regexp[re_indx] == ']'
-				&& xpath[xp_indx] == ']')
-			|| (xpath_regexp[re_indx] == '['
-				&& xpath[xp_indx] == '[')) {
-			/*
-			 * Increment the match count if we have a
-			 * new delimiter.
-			 */
-			if (match && re_indx && xp_indx && !delim)
-				match_len++;
-			delim = true;
-		} else {
-			delim = false;
-		}
-
-		/*
-		 * Proceed to the next character in the RE/XP string as
-		 * necessary.
-		 */
-		if (!re_wild)
-			re_indx++;
-		if (!xp_wild)
-			xp_indx++;
+		pc = *path++;
+		if (!pc)
+			return true;
+		if (pc != xc)
+			return false;
 	}
-
-	/*
-	 * If we finished matching and the last token was a full match
-	 * increment the match count appropriately.
-	 */
-	if (match && !delim &&
-		(xpath_regexp[re_indx] == '/'
-		 || xpath_regexp[re_indx] == ']'))
-		match_len++;
-
-	return match_len;
+	return true;
 }
 
 static void mgmt_be_adapter_delete(struct mgmt_be_client_adapter *adapter)
@@ -399,7 +296,6 @@ mgmt_be_adapter_cleanup_old_conn(struct mgmt_be_client_adapter *adapter)
 		}
 	}
 }
-
 
 static int mgmt_be_adapter_send_msg(struct mgmt_be_client_adapter *adapter,
 				    Mgmtd__BeMessage *be_msg)
@@ -492,9 +388,8 @@ mgmt_be_adapter_handle_msg(struct mgmt_be_client_adapter *adapter,
 	case MGMTD__BE_MESSAGE__MESSAGE_CFG_DATA_REPLY:
 		MGMTD_BE_ADAPTER_DBG(
 			"Got CFGDATA_REPLY from '%s' txn-id %" PRIx64
-			" batch-id %" PRIu64 " err:'%s'",
-			adapter->name, be_msg->cfg_data_reply->txn_id,
-			be_msg->cfg_data_reply->batch_id,
+			" err:'%s'", adapter->name,
+			be_msg->cfg_data_reply->txn_id,
 			be_msg->cfg_data_reply->error_if_any
 				? be_msg->cfg_data_reply->error_if_any
 				: "None");
@@ -503,21 +398,16 @@ mgmt_be_adapter_handle_msg(struct mgmt_be_client_adapter *adapter,
 		 */
 		mgmt_txn_notify_be_cfgdata_reply(
 			be_msg->cfg_data_reply->txn_id,
-			be_msg->cfg_data_reply->batch_id,
 			be_msg->cfg_data_reply->success,
 			be_msg->cfg_data_reply->error_if_any, adapter);
 		break;
 	case MGMTD__BE_MESSAGE__MESSAGE_CFG_APPLY_REPLY:
 		MGMTD_BE_ADAPTER_DBG(
 			"Got %s CFG_APPLY_REPLY from '%s' txn-id %" PRIx64
-			" for %zu batches id %" PRIu64 "-%" PRIu64 " err:'%s'",
+			" err:'%s'",
 			be_msg->cfg_apply_reply->success ? "successful"
 							 : "failed",
 			adapter->name, be_msg->cfg_apply_reply->txn_id,
-			be_msg->cfg_apply_reply->n_batch_ids,
-			be_msg->cfg_apply_reply->batch_ids[0],
-			be_msg->cfg_apply_reply->batch_ids
-				[be_msg->cfg_apply_reply->n_batch_ids - 1],
 			be_msg->cfg_apply_reply->error_if_any
 				? be_msg->cfg_apply_reply->error_if_any
 				: "None");
@@ -527,29 +417,16 @@ mgmt_be_adapter_handle_msg(struct mgmt_be_client_adapter *adapter,
 		mgmt_txn_notify_be_cfg_apply_reply(
 			be_msg->cfg_apply_reply->txn_id,
 			be_msg->cfg_apply_reply->success,
-			(uint64_t *)be_msg->cfg_apply_reply->batch_ids,
-			be_msg->cfg_apply_reply->n_batch_ids,
 			be_msg->cfg_apply_reply->error_if_any, adapter);
-		break;
-	case MGMTD__BE_MESSAGE__MESSAGE_GET_REPLY:
-	case MGMTD__BE_MESSAGE__MESSAGE_CFG_CMD_REPLY:
-	case MGMTD__BE_MESSAGE__MESSAGE_SHOW_CMD_REPLY:
-	case MGMTD__BE_MESSAGE__MESSAGE_NOTIFY_DATA:
-		/*
-		 * TODO: Add handling code in future.
-		 */
 		break;
 	/*
 	 * NOTE: The following messages are always sent from MGMTD to
 	 * Backend clients only and/or need not be handled on MGMTd.
 	 */
 	case MGMTD__BE_MESSAGE__MESSAGE_SUBSCR_REPLY:
-	case MGMTD__BE_MESSAGE__MESSAGE_GET_REQ:
 	case MGMTD__BE_MESSAGE__MESSAGE_TXN_REQ:
 	case MGMTD__BE_MESSAGE__MESSAGE_CFG_DATA_REQ:
 	case MGMTD__BE_MESSAGE__MESSAGE_CFG_APPLY_REQ:
-	case MGMTD__BE_MESSAGE__MESSAGE_CFG_CMD_REQ:
-	case MGMTD__BE_MESSAGE__MESSAGE_SHOW_CMD_REQ:
 	case MGMTD__BE_MESSAGE__MESSAGE__NOT_SET:
 	default:
 		/*
@@ -564,8 +441,8 @@ mgmt_be_adapter_handle_msg(struct mgmt_be_client_adapter *adapter,
 	return 0;
 }
 
-static int mgmt_be_send_txn_req(struct mgmt_be_client_adapter *adapter,
-				    uint64_t txn_id, bool create)
+int mgmt_be_send_txn_req(struct mgmt_be_client_adapter *adapter,
+			 uint64_t txn_id, bool create)
 {
 	Mgmtd__BeMessage be_msg;
 	Mgmtd__BeTxnReq txn_req;
@@ -584,17 +461,15 @@ static int mgmt_be_send_txn_req(struct mgmt_be_client_adapter *adapter,
 	return mgmt_be_adapter_send_msg(adapter, &be_msg);
 }
 
-static int
-mgmt_be_send_cfgdata_create_req(struct mgmt_be_client_adapter *adapter,
-				   uint64_t txn_id, uint64_t batch_id,
-				   Mgmtd__YangCfgDataReq **cfgdata_reqs,
-				   size_t num_reqs, bool end_of_data)
+int mgmt_be_send_cfgdata_req(struct mgmt_be_client_adapter *adapter,
+			     uint64_t txn_id,
+			     Mgmtd__YangCfgDataReq **cfgdata_reqs,
+			     size_t num_reqs, bool end_of_data)
 {
 	Mgmtd__BeMessage be_msg;
 	Mgmtd__BeCfgDataCreateReq cfgdata_req;
 
 	mgmtd__be_cfg_data_create_req__init(&cfgdata_req);
-	cfgdata_req.batch_id = batch_id;
 	cfgdata_req.txn_id = txn_id;
 	cfgdata_req.data_req = cfgdata_reqs;
 	cfgdata_req.n_data_req = num_reqs;
@@ -606,14 +481,14 @@ mgmt_be_send_cfgdata_create_req(struct mgmt_be_client_adapter *adapter,
 
 	MGMTD_BE_ADAPTER_DBG(
 		"Sending CFGDATA_CREATE_REQ to '%s' txn-id: %" PRIu64
-		" batch-id: %" PRIu64,
-		adapter->name, txn_id, batch_id);
+		" last: %s",
+		adapter->name, txn_id, end_of_data ? "yes" : "no");
 
 	return mgmt_be_adapter_send_msg(adapter, &be_msg);
 }
 
-static int mgmt_be_send_cfgapply_req(struct mgmt_be_client_adapter *adapter,
-					uint64_t txn_id)
+int mgmt_be_send_cfgapply_req(struct mgmt_be_client_adapter *adapter,
+			      uint64_t txn_id)
 {
 	Mgmtd__BeMessage be_msg;
 	Mgmtd__BeCfgDataApplyReq apply_req;
@@ -631,12 +506,77 @@ static int mgmt_be_send_cfgapply_req(struct mgmt_be_client_adapter *adapter,
 	return mgmt_be_adapter_send_msg(adapter, &be_msg);
 }
 
+int mgmt_be_send_native(enum mgmt_be_client_id id, void *msg)
+{
+	struct mgmt_be_client_adapter *adapter = mgmt_be_get_adapter_by_id(id);
+
+	if (!adapter)
+		return -1;
+
+	return mgmt_msg_native_send_msg(adapter->conn, msg, false);
+}
+
+/*
+ * Handle a native encoded message
+ */
+static void be_adapter_handle_native_msg(struct mgmt_be_client_adapter *adapter,
+					 struct mgmt_msg_header *msg,
+					 size_t msg_len)
+{
+	struct mgmt_msg_tree_data *tree_msg;
+	struct mgmt_msg_error *error_msg;
+
+	/* get the transaction */
+
+	switch (msg->code) {
+	case MGMT_MSG_CODE_ERROR:
+		error_msg = (typeof(error_msg))msg;
+		MGMTD_BE_ADAPTER_DBG("Got ERROR from '%s' txn-id %" PRIx64,
+				     adapter->name, msg->refer_id);
+
+		/* Forward the reply to the txn module */
+		mgmt_txn_notify_error(adapter, msg->refer_id, msg->req_id,
+				      error_msg->error, error_msg->errstr);
+
+		break;
+	case MGMT_MSG_CODE_TREE_DATA:
+		/* tree data from a backend client */
+		tree_msg = (typeof(tree_msg))msg;
+		MGMTD_BE_ADAPTER_DBG("Got TREE_DATA from '%s' txn-id %" PRIx64,
+				     adapter->name, msg->refer_id);
+
+		/* Forward the reply to the txn module */
+		mgmt_txn_notify_tree_data_reply(adapter, tree_msg, msg_len);
+		break;
+	default:
+		MGMTD_BE_ADAPTER_ERR("unknown native message txn-id %" PRIu64
+				     " req-id %" PRIu64
+				     " code %u from BE client for adapter %s",
+				     msg->refer_id, msg->req_id, msg->code,
+				     adapter->name);
+		break;
+	}
+}
+
+
 static void mgmt_be_adapter_process_msg(uint8_t version, uint8_t *data,
 					size_t len, struct msg_conn *conn)
 {
 	struct mgmt_be_client_adapter *adapter = conn->user;
-	Mgmtd__BeMessage *be_msg = mgmtd__be_message__unpack(NULL, len, data);
+	Mgmtd__BeMessage *be_msg;
 
+	if (version == MGMT_MSG_VERSION_NATIVE) {
+		struct mgmt_msg_header *msg = (typeof(msg))data;
+
+		if (len >= sizeof(*msg))
+			be_adapter_handle_native_msg(adapter, msg, len);
+		else
+			MGMTD_BE_ADAPTER_ERR("native message to adapter %s too short %zu",
+					     adapter->name, len);
+		return;
+	}
+
+	be_msg = mgmtd__be_message__unpack(NULL, len, data);
 	if (!be_msg) {
 		MGMTD_BE_ADAPTER_DBG(
 			"Failed to decode %zu bytes for adapter: %s", len,
@@ -649,17 +589,26 @@ static void mgmt_be_adapter_process_msg(uint8_t version, uint8_t *data,
 	mgmtd__be_message__free_unpacked(be_msg, NULL);
 }
 
-static void mgmt_be_iter_and_get_cfg(struct mgmt_ds_ctx *ds_ctx,
-				     const char *xpath, struct lyd_node *node,
+/*
+ * Args for callback
+ */
+struct mgmt_be_get_adapter_config_params {
+	struct mgmt_be_client_adapter *adapter;
+	struct nb_config_cbs *cfg_chgs;
+	uint32_t seq;
+};
+
+/*
+ * Callback to store the change a node in the datastore if it should be sync'd
+ * to the adapter (i.e., if the adapter is subscribed to it).
+ */
+static void mgmt_be_iter_and_get_cfg(const char *xpath, struct lyd_node *node,
 				     struct nb_node *nb_node, void *ctx)
 {
 	struct mgmt_be_get_adapter_config_params *parms = ctx;
 	struct mgmt_be_client_adapter *adapter = parms->adapter;
-	uint subscr;
 
-	subscr = mgmt_be_get_subscr_for_xpath_and_client(
-		xpath, adapter->id, MGMT_SUBSCR_NOTIFY_CFG);
-	if (subscr)
+	if (be_is_client_interested(xpath, adapter->id, true))
 		nb_config_diff_created(node, &parms->seq, parms->cfg_chgs);
 }
 
@@ -781,11 +730,15 @@ struct msg_conn *mgmt_be_create_adapter(int conn_fd, union sockunion *from)
 	mgmt_be_adapters_add_tail(&mgmt_be_adapters, adapter);
 	RB_INIT(nb_config_cbs, &adapter->cfg_chgs);
 
-	adapter->conn = msg_server_conn_create(
-		mgmt_loop, conn_fd, mgmt_be_adapter_notify_disconnect,
-		mgmt_be_adapter_process_msg, MGMTD_BE_MAX_NUM_MSG_PROC,
-		MGMTD_BE_MAX_NUM_MSG_WRITE, MGMTD_BE_MSG_MAX_LEN, adapter,
-		"BE-adapter");
+	adapter->conn = msg_server_conn_create(mgmt_loop, conn_fd,
+					       mgmt_be_adapter_notify_disconnect,
+					       mgmt_be_adapter_process_msg,
+					       MGMTD_BE_MAX_NUM_MSG_PROC,
+					       MGMTD_BE_MAX_NUM_MSG_WRITE,
+					       MGMTD_BE_MAX_MSG_LEN, adapter,
+					       "BE-adapter");
+
+	adapter->conn->debug = DEBUG_MODE_CHECK(&mgmt_debug_be, DEBUG_MODE_ALL);
 
 	MGMTD_BE_ADAPTER_DBG("Added new MGMTD Backend adapter '%s'",
 			     adapter->name);
@@ -796,8 +749,7 @@ struct msg_conn *mgmt_be_create_adapter(int conn_fd, union sockunion *from)
 struct mgmt_be_client_adapter *
 mgmt_be_get_adapter_by_id(enum mgmt_be_client_id id)
 {
-	return (id < MGMTD_BE_CLIENT_ID_MAX ? mgmt_be_adapters_by_id[id]
-					       : NULL);
+	return (id < MGMTD_BE_CLIENT_ID_MAX ? mgmt_be_adapters_by_id[id] : NULL);
 }
 
 struct mgmt_be_client_adapter *
@@ -806,11 +758,23 @@ mgmt_be_get_adapter_by_name(const char *name)
 	return mgmt_be_find_adapter_by_name(name);
 }
 
+void mgmt_be_adapter_toggle_client_debug(bool set)
+{
+	struct mgmt_be_client_adapter *adapter;
+
+	FOREACH_ADAPTER_IN_LIST (adapter)
+		adapter->conn->debug = set;
+}
+
+/*
+ * Get a full set of changes for all the config that an adapter is subscribed to
+ * receive.
+ */
 int mgmt_be_get_adapter_config(struct mgmt_be_client_adapter *adapter,
-				  struct mgmt_ds_ctx *ds_ctx,
-				  struct nb_config_cbs **cfg_chgs)
+			       struct nb_config_cbs **cfg_chgs)
 {
 	struct mgmt_be_get_adapter_config_params parms;
+	struct nb_config *cfg_root = mgmt_ds_get_nb_config(mm->running_ds);
 
 	assert(cfg_chgs);
 
@@ -826,111 +790,73 @@ int mgmt_be_get_adapter_config(struct mgmt_be_client_adapter *adapter,
 		parms.cfg_chgs = &adapter->cfg_chgs;
 		parms.seq = 0;
 
-		mgmt_ds_iter_data(ds_ctx, "", mgmt_be_iter_and_get_cfg,
-				  (void *)&parms);
+		mgmt_ds_iter_data(MGMTD_DS_RUNNING, cfg_root, "",
+				  mgmt_be_iter_and_get_cfg, (void *)&parms);
 	}
 
 	*cfg_chgs = &adapter->cfg_chgs;
 	return 0;
 }
 
-int mgmt_be_create_txn(struct mgmt_be_client_adapter *adapter,
-			   uint64_t txn_id)
+uint64_t mgmt_be_interested_clients(const char *xpath, bool config)
 {
-	return mgmt_be_send_txn_req(adapter, txn_id, true);
-}
-
-int mgmt_be_destroy_txn(struct mgmt_be_client_adapter *adapter,
-			    uint64_t txn_id)
-{
-	return mgmt_be_send_txn_req(adapter, txn_id, false);
-}
-
-int mgmt_be_send_cfg_data_create_req(struct mgmt_be_client_adapter *adapter,
-					uint64_t txn_id, uint64_t batch_id,
-					struct mgmt_be_cfgreq *cfg_req,
-					bool end_of_data)
-{
-	return mgmt_be_send_cfgdata_create_req(
-		adapter, txn_id, batch_id, cfg_req->cfgdata_reqs,
-		cfg_req->num_reqs, end_of_data);
-}
-
-extern int
-mgmt_be_send_cfg_apply_req(struct mgmt_be_client_adapter *adapter,
-			      uint64_t txn_id)
-{
-	return mgmt_be_send_cfgapply_req(adapter, txn_id);
-}
-
-void mgmt_be_get_subscr_info_for_xpath(
-	const char *xpath, struct mgmt_be_client_subscr_info *subscr_info)
-{
+	struct mgmt_be_xpath_map *maps, *map;
 	enum mgmt_be_client_id id;
-	uint i;
+	uint64_t clients;
 
-	memset(subscr_info, 0, sizeof(*subscr_info));
+	maps = config ? be_cfg_xpath_map : be_oper_xpath_map;
+
+	clients = 0;
 
 	MGMTD_BE_ADAPTER_DBG("XPATH: '%s'", xpath);
-	for (i = 0; i < mgmt_num_xpath_maps; i++) {
-		if (!mgmt_be_eval_regexp_match(mgmt_xpath_map[i].xpath_regexp,
-					       xpath))
-			continue;
-		FOREACH_MGMTD_BE_CLIENT_ID (id) {
-			subscr_info->xpath_subscr[id] |=
-				mgmt_xpath_map[i].subscr_info[id];
-		}
-	}
+	darr_foreach_p (maps, map)
+		if (mgmt_be_xpath_prefix(map->xpath_prefix, xpath))
+			clients |= map->clients;
 
 	if (DEBUG_MODE_CHECK(&mgmt_debug_be, DEBUG_MODE_ALL)) {
-		FOREACH_MGMTD_BE_CLIENT_ID (id) {
-			if (!subscr_info->xpath_subscr[id])
-				continue;
-			MGMTD_BE_ADAPTER_DBG("Cient: %s: subscribed: 0x%x",
-					     mgmt_be_client_id2name(id),
-					     subscr_info->xpath_subscr[id]);
-		}
+		FOREACH_BE_CLIENT_BITS (id, clients)
+			MGMTD_BE_ADAPTER_DBG("Cient: %s: subscribed",
+					     mgmt_be_client_id2name(id));
 	}
+	return clients;
 }
 
 /**
- * Return the subscription info bits for a given `xpath` for a given
- * `client_id`.
+ * Return true if `client_id` is interested in `xpath` for `config`
+ * or oper (!`config`).
  *
  * Args:
- *     xpath - the xpath to check for subscription information.
+ *     xpath - the xpath to check for interest.
  *     client_id - the BE client being checked for.
- *     subscr_mask - The subscr bits the caller is interested in seeing
- * if set.
+ *     bool - check for config (vs oper) subscription.
  *
  * Returns:
- *     The subscription info bits.
+ *     Interested or not.
  */
-static uint mgmt_be_get_subscr_for_xpath_and_client(
-	const char *xpath, enum mgmt_be_client_id client_id, uint subscr_mask)
+static bool be_is_client_interested(const char *xpath,
+				    enum mgmt_be_client_id id, bool config)
 {
-	struct mgmt_be_client_xpath_map *map;
-	uint subscr = 0;
-	uint i;
+	const char *const *xpaths;
 
-	assert(client_id < MGMTD_BE_CLIENT_ID_MAX);
+	assert(id < MGMTD_BE_CLIENT_ID_MAX);
 
 	MGMTD_BE_ADAPTER_DBG("Checking client: %s for xpath: '%s'",
-			     mgmt_be_client_id2name(client_id), xpath);
+			     mgmt_be_client_id2name(id), xpath);
 
-	map = &mgmt_client_xpaths[client_id];
-	for (i = 0; i < map->nxpaths; i++) {
-		if (!mgmt_be_eval_regexp_match(map->xpaths[i].xpath, xpath))
-			continue;
-		MGMTD_BE_ADAPTER_DBG("xpath: %s: matched: %s",
-				     map->xpaths[i].xpath, xpath);
-		subscr |= map->xpaths[i].subscribed;
-		if ((subscr & subscr_mask) == subscr_mask)
-			break;
+	xpaths = config ? be_client_xpaths[id] : be_client_oper_xpaths[id];
+	if (xpaths) {
+		for (; *xpaths; xpaths++) {
+			if (mgmt_be_xpath_prefix(*xpaths, xpath)) {
+				MGMTD_BE_ADAPTER_DBG("xpath: %s: matched: %s",
+						     *xpaths, xpath);
+				return true;
+			}
+		}
 	}
-	MGMTD_BE_ADAPTER_DBG("client: %s: subscribed: 0x%x",
-			     mgmt_be_client_id2name(client_id), subscr);
-	return subscr;
+
+	MGMTD_BE_ADAPTER_DBG("client: %s: not interested",
+			     mgmt_be_client_id2name(id));
+	return false;
 }
 
 void mgmt_be_adapter_status_write(struct vty *vty)
@@ -957,57 +883,49 @@ void mgmt_be_adapter_status_write(struct vty *vty)
 		(int)mgmt_be_adapters_count(&mgmt_be_adapters));
 }
 
+static void be_show_xpath_register(struct vty *vty,
+				   struct mgmt_be_xpath_map *map)
+{
+	enum mgmt_be_client_id id;
+	const char *astr;
+
+	vty_out(vty, " - xpath: '%s'\n", map->xpath_prefix);
+	FOREACH_BE_CLIENT_BITS (id, map->clients) {
+		astr = mgmt_be_get_adapter_by_id(id) ? "active" : "inactive";
+		vty_out(vty, "   -- %s-client: '%s'\n", astr,
+			mgmt_be_client_id2name(id));
+	}
+}
 void mgmt_be_xpath_register_write(struct vty *vty)
 {
-	uint indx;
-	enum mgmt_be_client_id id;
-	struct mgmt_be_client_adapter *adapter;
-	uint info;
+	struct mgmt_be_xpath_map *map;
 
-	vty_out(vty, "MGMTD Backend XPath Registry\n");
+	vty_out(vty, "MGMTD Backend CFG XPath Registry: Count: %u\n",
+		darr_len(be_oper_xpath_map));
+	darr_foreach_p (be_cfg_xpath_map, map)
+		be_show_xpath_register(vty, map);
 
-	for (indx = 0; indx < mgmt_num_xpath_maps; indx++) {
-		vty_out(vty, " - XPATH: '%s'\n",
-			mgmt_xpath_map[indx].xpath_regexp);
-		FOREACH_MGMTD_BE_CLIENT_ID (id) {
-			info = mgmt_xpath_map[indx].subscr_info[id];
-			if (!info)
-				continue;
-			vty_out(vty,
-				"   -- Client: '%s'\tValidate:%d, Notify:%d, Own:%d\n",
-				mgmt_be_client_id2name(id),
-				(info & MGMT_SUBSCR_VALIDATE_CFG) != 0,
-				(info & MGMT_SUBSCR_NOTIFY_CFG) != 0,
-				(info & MGMT_SUBSCR_OPER_OWN) != 0);
-			adapter = mgmt_be_get_adapter_by_id(id);
-			if (adapter)
-				vty_out(vty, "     -- Adapter: %p\n", adapter);
-		}
-	}
-
-	vty_out(vty, "Total XPath Registries: %u\n", mgmt_num_xpath_maps);
+	vty_out(vty, "\nMGMTD Backend OPER XPath Registry: Count: %u\n",
+		darr_len(be_oper_xpath_map));
+	darr_foreach_p (be_oper_xpath_map, map)
+		be_show_xpath_register(vty, map);
 }
 
-void mgmt_be_xpath_subscr_info_write(struct vty *vty, const char *xpath)
+void mgmt_be_show_xpath_registries(struct vty *vty, const char *xpath)
 {
-	struct mgmt_be_client_subscr_info subscr;
 	enum mgmt_be_client_id id;
 	struct mgmt_be_client_adapter *adapter;
-	uint info;
+	uint64_t cclients, oclients, combined;
 
-	mgmt_be_get_subscr_info_for_xpath(xpath, &subscr);
+	cclients = mgmt_be_interested_clients(xpath, true);
+	oclients = mgmt_be_interested_clients(xpath, false);
+	combined = cclients | oclients;
 
 	vty_out(vty, "XPath: '%s'\n", xpath);
-	FOREACH_MGMTD_BE_CLIENT_ID (id) {
-		info = subscr.xpath_subscr[id];
-		if (!info)
-			continue;
-		vty_out(vty,
-			"  -- Client: '%s'\tValidate:%d, Notify:%d, Own:%d\n",
-			mgmt_be_client_id2name(id),
-			(info & MGMT_SUBSCR_VALIDATE_CFG) != 0,
-			(info & MGMT_SUBSCR_NOTIFY_CFG) != 0,
-			(info & MGMT_SUBSCR_OPER_OWN) != 0);
+	FOREACH_BE_CLIENT_BITS (id, combined) {
+		vty_out(vty, "  -- Client: '%s'\tconfig:%d oper:%d\n",
+			mgmt_be_client_id2name(id), IS_IDBIT_SET(cclients, id),
+			IS_IDBIT_SET(oclients, id));
 		adapter = mgmt_be_get_adapter_by_id(id);
 		if (adapter)
 			vty_out(vty, "    -- Adapter: %p\n", adapter);

@@ -5,6 +5,7 @@
  */
 
 #include <zebra.h>
+#include <sys/stat.h>
 
 #include "libfrr.h"
 #include "lib/version.h"
@@ -147,8 +148,7 @@ static int nb_cli_apply_changes_internal(struct vty *vty,
 
 	nb_candidate_edit_config_changes(
 		vty->candidate_config, vty->cfg_changes, vty->num_cfg_changes,
-		xpath_base, VTY_CURR_XPATH, vty->xpath_index, buf, sizeof(buf),
-		&error);
+		xpath_base, buf, sizeof(buf), &error);
 	if (error) {
 		/*
 		 * Failure to edit the candidate configuration should never
@@ -180,8 +180,26 @@ static int nb_cli_apply_changes_internal(struct vty *vty,
 	return CMD_SUCCESS;
 }
 
+static void create_xpath_base_abs(struct vty *vty, char *xpath_base_abs,
+				  size_t xpath_base_abs_size,
+				  const char *xpath_base)
+{
+	memset(xpath_base_abs, 0, xpath_base_abs_size);
+
+	if (xpath_base[0] == 0)
+		xpath_base = ".";
+
+	/* If base xpath is relative, prepend current vty xpath. */
+	if (vty->xpath_index > 0 && xpath_base[0] == '.') {
+		strlcpy(xpath_base_abs, VTY_CURR_XPATH, xpath_base_abs_size);
+		xpath_base++; /* skip '.' */
+	}
+	strlcat(xpath_base_abs, xpath_base, xpath_base_abs_size);
+}
+
 int nb_cli_apply_changes(struct vty *vty, const char *xpath_base_fmt, ...)
 {
+	char xpath_base_abs[XPATH_MAXLEN] = {};
 	char xpath_base[XPATH_MAXLEN] = {};
 	bool implicit_commit;
 	int ret;
@@ -194,6 +212,9 @@ int nb_cli_apply_changes(struct vty *vty, const char *xpath_base_fmt, ...)
 		vsnprintf(xpath_base, sizeof(xpath_base), xpath_base_fmt, ap);
 		va_end(ap);
 	}
+
+	create_xpath_base_abs(vty, xpath_base_abs, sizeof(xpath_base_abs),
+			      xpath_base);
 
 	if (vty_mgmt_should_process_cli_apply_changes(vty)) {
 		VTY_CHECK_XPATH;
@@ -202,18 +223,20 @@ int nb_cli_apply_changes(struct vty *vty, const char *xpath_base_fmt, ...)
 			return CMD_SUCCESS;
 
 		implicit_commit = vty_needs_implicit_commit(vty);
-		ret = vty_mgmt_send_config_data(vty);
+		ret = vty_mgmt_send_config_data(vty, xpath_base_abs,
+						implicit_commit);
 		if (ret >= 0 && !implicit_commit)
 			vty->mgmt_num_pending_setcfg++;
 		return ret;
 	}
 
-	return nb_cli_apply_changes_internal(vty, xpath_base, false);
+	return nb_cli_apply_changes_internal(vty, xpath_base_abs, false);
 }
 
 int nb_cli_apply_changes_clear_pending(struct vty *vty,
 				       const char *xpath_base_fmt, ...)
 {
+	char xpath_base_abs[XPATH_MAXLEN] = {};
 	char xpath_base[XPATH_MAXLEN] = {};
 	bool implicit_commit;
 	int ret;
@@ -227,17 +250,28 @@ int nb_cli_apply_changes_clear_pending(struct vty *vty,
 		va_end(ap);
 	}
 
+	create_xpath_base_abs(vty, xpath_base_abs, sizeof(xpath_base_abs),
+			      xpath_base);
+
 	if (vty_mgmt_should_process_cli_apply_changes(vty)) {
 		VTY_CHECK_XPATH;
-
+		/*
+		 * The legacy user wanted to clear pending (i.e., perform a
+		 * commit immediately) due to some non-yang compatible
+		 * functionality. This new mgmtd code however, continues to send
+		 * changes putting off the commit until XFRR_end is received
+		 * (i.e., end-of-config-file). This should be fine b/c all
+		 * conversions to mgmtd require full proper implementations.
+		 */
 		implicit_commit = vty_needs_implicit_commit(vty);
-		ret = vty_mgmt_send_config_data(vty);
+		ret = vty_mgmt_send_config_data(vty, xpath_base_abs,
+						implicit_commit);
 		if (ret >= 0 && !implicit_commit)
 			vty->mgmt_num_pending_setcfg++;
 		return ret;
 	}
 
-	return nb_cli_apply_changes_internal(vty, xpath_base, true);
+	return nb_cli_apply_changes_internal(vty, xpath_base_abs, true);
 }
 
 int nb_cli_rpc(struct vty *vty, const char *xpath, struct list *input,
@@ -756,7 +790,7 @@ DEFUN (config_exclusive,
        "Configuration from vty interface\n"
        "Configure exclusively from this terminal\n")
 {
-	return vty_config_enter(vty, true, true);
+	return vty_config_enter(vty, true, true, false);
 }
 
 /* Configure using a private candidate configuration. */
@@ -766,7 +800,7 @@ DEFUN (config_private,
        "Configuration from vty interface\n"
        "Configure using a private candidate configuration\n")
 {
-	return vty_config_enter(vty, true, false);
+	return vty_config_enter(vty, true, false, false);
 }
 
 DEFPY (config_commit,
@@ -1404,11 +1438,9 @@ static int nb_cli_oper_data_cb(const struct lysc_node *snode,
 	}
 
 exit:
-	yang_data_free(data);
 	return NB_OK;
 
 error:
-	yang_data_free(data);
 	return NB_ERR;
 }
 
@@ -1457,9 +1489,14 @@ DEFPY (show_yang_operational_data,
 		ly_ctx = ly_native_ctx;
 
 	/* Obtain data. */
-	dnode = yang_dnode_new(ly_ctx, false);
-	ret = nb_oper_data_iterate(xpath, translator, 0, nb_cli_oper_data_cb,
-				   dnode);
+	if (translator) {
+		dnode = yang_dnode_new(ly_ctx, false);
+		ret = nb_oper_iterate_legacy(xpath, translator, 0,
+					   nb_cli_oper_data_cb, dnode, NULL);
+	} else {
+		dnode = NULL;
+		ret = nb_oper_iterate_legacy(xpath, NULL, 0, NULL, NULL, &dnode);
+	}
 	if (ret != NB_OK) {
 		if (format == LYD_JSON)
 			vty_out(vty, "{}\n");
@@ -1467,7 +1504,8 @@ DEFPY (show_yang_operational_data,
 			/* embed ly_last_errmsg() when we get newer libyang */
 			vty_out(vty, "<!-- Not found -->\n");
 		}
-		yang_dnode_free(dnode);
+		if (dnode)
+			yang_dnode_free(dnode);
 		return CMD_WARNING;
 	}
 

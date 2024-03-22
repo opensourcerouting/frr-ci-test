@@ -88,10 +88,12 @@ static void nhrp_request_stop(void)
 	nhrp_zebra_terminate();
 	vici_terminate();
 	evmgr_terminate();
-	nhrp_vc_terminate();
 	vrf_terminate();
+	nhrp_vc_terminate();
 
 	debugf(NHRP_DEBUG_COMMON, "Done.");
+
+	resolver_terminate();
 	frr_fini();
 
 	exit(0);
@@ -155,8 +157,10 @@ int main(int argc, char **argv)
 	nhrp_vc_init();
 	nhrp_packet_init();
 	vici_init();
-	if_zapi_callbacks(nhrp_ifp_create, nhrp_ifp_up,
-			  nhrp_ifp_down, nhrp_ifp_destroy);
+	hook_register_prio(if_real, 0, nhrp_ifp_create);
+	hook_register_prio(if_up, 0, nhrp_ifp_up);
+	hook_register_prio(if_down, 0, nhrp_ifp_down);
+	hook_register_prio(if_unreal, 0, nhrp_ifp_destroy);
 	nhrp_zebra_init();
 	nhrp_shortcut_init();
 

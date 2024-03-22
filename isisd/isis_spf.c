@@ -378,6 +378,8 @@ isis_spftree_new(struct isis_area *area, struct lspdb_head *lspdb,
 
 static void _isis_spftree_del(struct isis_spftree *spftree)
 {
+	void *info, *backup_info;
+
 	hash_clean_and_free(&spftree->prefix_sids, NULL);
 	isis_zebra_rlfa_unregister_all(spftree);
 	isis_rlfa_list_clear(spftree);
@@ -391,10 +393,12 @@ static void _isis_spftree_del(struct isis_spftree *spftree)
 	list_delete(&spftree->sadj_list);
 	isis_vertex_queue_free(&spftree->tents);
 	isis_vertex_queue_free(&spftree->paths);
-	isis_route_table_info_free(spftree->route_table->info);
-	isis_route_table_info_free(spftree->route_table_backup->info);
+	info =  spftree->route_table->info;
+	backup_info = spftree->route_table_backup->info;
 	route_table_finish(spftree->route_table);
 	route_table_finish(spftree->route_table_backup);
+	isis_route_table_info_free(info);
+	isis_route_table_info_free(backup_info);
 }
 
 void isis_spftree_del(struct isis_spftree *spftree)
@@ -837,6 +841,7 @@ static int isis_spf_process_lsp(struct isis_spftree *spftree,
 	struct isis_mt_router_info *mt_router_info = NULL;
 	struct prefix_pair ip_info;
 	bool has_valid_psid;
+	bool loc_is_in_ipv6_reach = false;
 
 	if (isis_lfa_excise_node_check(spftree, lsp->hdr.lsp_id)) {
 		if (IS_DEBUG_LFA)
@@ -1125,6 +1130,50 @@ lspfragloop:
 				}
 			}
 			if (!has_valid_psid)
+				process_N(spftree, vtype, &ip_info, dist,
+					  depth + 1, NULL, parent);
+		}
+
+		/* Process SRv6 Locator TLVs */
+
+		struct isis_item_list *srv6_locators = isis_lookup_mt_items(
+			&lsp->tlvs->srv6_locator, spftree->mtid);
+
+		struct isis_srv6_locator_tlv *loc;
+		for (loc = srv6_locators ? (struct isis_srv6_locator_tlv *)
+						   srv6_locators->head
+					 : NULL;
+		     loc; loc = loc->next) {
+
+			if (loc->algorithm != SR_ALGORITHM_SPF)
+				continue;
+
+			dist = cost + loc->metric;
+			vtype = VTYPE_IP6REACH_INTERNAL;
+			memset(&ip_info, 0, sizeof(ip_info));
+			ip_info.dest.family = AF_INET6;
+			ip_info.dest.u.prefix6 = loc->prefix.prefix;
+			ip_info.dest.prefixlen = loc->prefix.prefixlen;
+
+			/* An SRv6 Locator can be received in both a Prefix
+			Reachability TLV and an SRv6 Locator TLV (as per RFC
+			9352 section #5). We go through the Prefix Reachability
+			TLVs and check if the SRv6 Locator is present in some of
+			them. If we find the SRv6 Locator in some Prefix
+			Reachbility TLV then it means that we have already
+			processed it before and we can skip it. */
+			for (r = ipv6_reachs ? (struct isis_ipv6_reach *)
+						       ipv6_reachs->head
+					     : NULL;
+			     r; r = r->next) {
+				if (prefix_same((struct prefix *)&r->prefix,
+						(struct prefix *)&loc->prefix))
+					loc_is_in_ipv6_reach = true;
+			}
+
+			/* SRv6 locator not present in Prefix Reachability TLV,
+			 * let's process it */
+			if (!loc_is_in_ipv6_reach)
 				process_N(spftree, vtype, &ip_info, dist,
 					  depth + 1, NULL, parent);
 		}
@@ -1843,6 +1892,9 @@ void isis_run_spf(struct isis_spftree *spftree)
 	struct timeval time_end;
 	struct isis_mt_router_info *mt_router_info;
 	uint16_t mtid = 0;
+#ifndef FABRICD
+	bool flex_algo_enabled;
+#endif /* ifndef FABRICD */
 
 	/* Get time that can't roll backwards. */
 	monotime(&time_start);
@@ -1885,16 +1937,27 @@ void isis_run_spf(struct isis_spftree *spftree)
 	 * not supported by the node, it MUST stop participating in such
 	 * Flexible-Algorithm.
 	 */
-	if (flex_algo_id_valid(spftree->algorithm) &&
-	    !flex_algo_get_state(spftree->area->flex_algos,
-				 spftree->algorithm)) {
-		if (!CHECK_FLAG(spftree->flags, F_SPFTREE_DISABLED)) {
-			isis_spftree_clear(spftree);
-			SET_FLAG(spftree->flags, F_SPFTREE_DISABLED);
+	if (flex_algo_id_valid(spftree->algorithm)) {
+		flex_algo_enabled = isis_flex_algo_elected_supported(
+			spftree->algorithm, spftree->area);
+		if (flex_algo_enabled !=
+		    flex_algo_get_state(spftree->area->flex_algos,
+					spftree->algorithm)) {
+			/* actual state is inconsistent with local LSP */
 			lsp_regenerate_schedule(spftree->area,
 						spftree->area->is_type, 0);
+			goto out;
 		}
-		goto out;
+		if (!flex_algo_enabled) {
+			if (!CHECK_FLAG(spftree->flags, F_SPFTREE_DISABLED)) {
+				isis_spftree_clear(spftree);
+				SET_FLAG(spftree->flags, F_SPFTREE_DISABLED);
+				lsp_regenerate_schedule(spftree->area,
+							spftree->area->is_type,
+							0);
+			}
+			goto out;
+		}
 	}
 #endif /* ifndef FABRICD */
 

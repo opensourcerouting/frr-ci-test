@@ -155,7 +155,7 @@ int pim_pim_packet(struct interface *ifp, uint8_t *buf, size_t len,
 	bool   no_fwd;
 
 #if PIM_IPV == 4
-	if (len < sizeof(*ip_hdr)) {
+	if (len <= sizeof(*ip_hdr)) {
 		if (PIM_DEBUG_PIM_PACKETS)
 			zlog_debug(
 				"PIM packet size=%zu shorter than minimum=%zu",
@@ -189,7 +189,6 @@ int pim_pim_packet(struct interface *ifp, uint8_t *buf, size_t len,
 	iovp->iov_len = pim_msg_len;
 	iovp++;
 
-	header = (struct pim_msg_header *)pim_msg;
 	if (pim_msg_len < PIM_PIM_MIN_LEN) {
 		if (PIM_DEBUG_PIM_PACKETS)
 			zlog_debug(
@@ -197,6 +196,7 @@ int pim_pim_packet(struct interface *ifp, uint8_t *buf, size_t len,
 				pim_msg_len, PIM_PIM_MIN_LEN);
 		return -1;
 	}
+	header = (struct pim_msg_header *)pim_msg;
 
 	if (header->ver != PIM_PROTO_VERSION) {
 		if (PIM_DEBUG_PIM_PACKETS)
@@ -743,14 +743,13 @@ static int hello_send(struct interface *ifp, uint16_t holdtime)
 	pim_ifp = ifp->info;
 
 	if (PIM_DEBUG_PIM_HELLO)
-		zlog_debug(
-			"%s: to %pPA on %s: holdt=%u prop_d=%u overr_i=%u dis_join_supp=%d dr_prio=%u gen_id=%08x addrs=%d",
-			__func__, &qpim_all_pim_routers_addr, ifp->name,
-			holdtime, pim_ifp->pim_propagation_delay_msec,
-			pim_ifp->pim_override_interval_msec,
-			pim_ifp->pim_can_disable_join_suppression,
-			pim_ifp->pim_dr_priority, pim_ifp->pim_generation_id,
-			listcount(ifp->connected));
+		zlog_debug("%s: to %pPA on %s: holdt=%u prop_d=%u overr_i=%u dis_join_supp=%d dr_prio=%u gen_id=%08x addrs=%zu",
+			   __func__, &qpim_all_pim_routers_addr, ifp->name,
+			   holdtime, pim_ifp->pim_propagation_delay_msec,
+			   pim_ifp->pim_override_interval_msec,
+			   pim_ifp->pim_can_disable_join_suppression,
+			   pim_ifp->pim_dr_priority, pim_ifp->pim_generation_id,
+			   if_connected_count(ifp->connected));
 
 	pim_tlv_size = pim_hello_build_tlv(
 		ifp, pim_msg + PIM_PIM_MIN_LEN,

@@ -185,9 +185,11 @@ Route Map Match Command
 
    Matches the specified `local-preference`.
 
-.. clicmd:: match community COMMUNITY_LIST
+.. clicmd:: match community COMMUNITY_LIST [<exact-match|any>]
 
-   Matches the specified  `community_list`
+   Matches the specified  `community_list`. ``exact-match`` specifies to
+   do the exact matching of the communities, while ``any`` - can match any
+   community specified in COMMUNITY_LIST.
 
 .. clicmd:: match peer IPV4_ADDR
 
@@ -334,6 +336,10 @@ Route Map Set Command
 .. clicmd:: set community COMMUNITY
 
    Set the BGP community attribute.
+
+.. clicmd:: set extended-comm-list <EXTCOMMUNITY_LIST_NAME> delete
+
+   Set BGP extended community list for deletion.
 
 .. clicmd:: set ipv6 next-hop local IPV6_ADDRESS
 

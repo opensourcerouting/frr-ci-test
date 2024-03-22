@@ -65,9 +65,6 @@ struct community_entry {
 	/* Standard or expanded.  */
 	uint8_t style;
 
-	/* Any match.  */
-	bool any;
-
 	/* Sequence number. */
 	int64_t seq;
 
@@ -161,10 +158,17 @@ extern bool community_list_exact_match(struct community *com,
 				       struct community_list *list);
 extern bool lcommunity_list_exact_match(struct lcommunity *lcom,
 					struct community_list *list);
+extern bool community_list_any_match(struct community *com,
+				     struct community_list *list);
 extern struct community *
 community_list_match_delete(struct community *com, struct community_list *list);
+extern bool lcommunity_list_any_match(struct lcommunity *lcom,
+				      struct community_list *list);
 extern struct lcommunity *
 lcommunity_list_match_delete(struct lcommunity *lcom,
+			     struct community_list *list);
+extern struct ecommunity *
+ecommunity_list_match_delete(struct ecommunity *ecom,
 			     struct community_list *list);
 
 static inline uint32_t bgp_clist_hash_key(char *name)

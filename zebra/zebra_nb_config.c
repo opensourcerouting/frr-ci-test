@@ -830,8 +830,8 @@ int lib_interface_zebra_ip_addrs_create(struct nb_cb_create_args *args)
 	struct interface *ifp;
 	struct prefix prefix;
 
-	// addr_family = yang_dnode_get_enum(dnode, "./address-family");
-	yang_dnode_get_prefix(&prefix, args->dnode, "./ip-prefix");
+	// addr_family = yang_dnode_get_enum(dnode, "address-family");
+	yang_dnode_get_prefix(&prefix, args->dnode, "ip-prefix");
 	apply_mask(&prefix);
 
 	switch (args->event) {
@@ -870,7 +870,7 @@ int lib_interface_zebra_ip_addrs_destroy(struct nb_cb_destroy_args *args)
 	struct prefix prefix;
 	struct connected *ifc;
 
-	yang_dnode_get_prefix(&prefix, args->dnode, "./ip-prefix");
+	yang_dnode_get_prefix(&prefix, args->dnode, "ip-prefix");
 	apply_mask(&prefix);
 
 	switch (args->event) {
@@ -910,7 +910,7 @@ int lib_interface_zebra_ip_addrs_destroy(struct nb_cb_destroy_args *args)
 		/* This is not real address or interface is not active. */
 		if (!CHECK_FLAG(ifc->conf, ZEBRA_IFC_QUEUED)
 		    || !CHECK_FLAG(ifp->status, ZEBRA_INTERFACE_ACTIVE)) {
-			listnode_delete(ifp->connected, ifc);
+			if_connected_del(ifp->connected, ifc);
 			connected_free(&ifc);
 			return NB_ERR_VALIDATION;
 		}
@@ -1033,7 +1033,7 @@ int lib_interface_zebra_link_detect_modify(struct nb_cb_modify_args *args)
 	bool link_detect;
 
 	ifp = nb_running_get_entry(args->dnode, NULL, true);
-	link_detect = yang_dnode_get_bool(args->dnode, "./link-detect");
+	link_detect = yang_dnode_get_bool(args->dnode, "link-detect");
 
 	if_linkdetect(ifp, link_detect);
 
@@ -1049,7 +1049,7 @@ int lib_interface_zebra_link_detect_destroy(struct nb_cb_destroy_args *args)
 	bool link_detect;
 
 	ifp = nb_running_get_entry(args->dnode, NULL, true);
-	link_detect = yang_dnode_get_bool(args->dnode, "./link-detect");
+	link_detect = yang_dnode_get_bool(args->dnode, "link-detect");
 
 	if_linkdetect(ifp, link_detect);
 
@@ -1088,6 +1088,50 @@ int lib_interface_zebra_shutdown_destroy(struct nb_cb_destroy_args *args)
 }
 
 /*
+ * XPath: /frr-interface:lib/interface/frr-zebra:zebra/mpls
+ */
+int lib_interface_zebra_mpls_modify(struct nb_cb_modify_args *args)
+{
+	struct interface *ifp;
+	bool mpls;
+	struct zebra_if *zif;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	ifp = nb_running_get_entry(args->dnode, NULL, true);
+	zif = ifp->info;
+	mpls = yang_dnode_get_bool(args->dnode, NULL);
+
+	if (mpls)
+		zif->mpls_config = IF_ZEBRA_DATA_ON;
+	else
+		zif->mpls_config = IF_ZEBRA_DATA_OFF;
+
+	dplane_intf_mpls_modify_state(ifp, mpls);
+
+	return NB_OK;
+}
+
+int lib_interface_zebra_mpls_destroy(struct nb_cb_destroy_args *args)
+{
+	struct interface *ifp;
+	struct zebra_if *zif;
+
+	if (args->event != NB_EV_APPLY)
+		return NB_OK;
+
+	ifp = nb_running_get_entry(args->dnode, NULL, true);
+	zif = ifp->info;
+
+	zif->mpls_config = IF_ZEBRA_DATA_UNSPEC;
+
+	/* keep the state as it is */
+
+	return NB_OK;
+}
+
+/*
  * XPath: /frr-interface:lib/interface/frr-zebra:zebra/bandwidth
  */
 int lib_interface_zebra_bandwidth_modify(struct nb_cb_modify_args *args)
@@ -1099,7 +1143,7 @@ int lib_interface_zebra_bandwidth_modify(struct nb_cb_modify_args *args)
 	uint32_t bandwidth;
 
 	ifp = nb_running_get_entry(args->dnode, NULL, true);
-	bandwidth = yang_dnode_get_uint32(args->dnode, "./bandwidth");
+	bandwidth = yang_dnode_get_uint32(args->dnode, "bandwidth");
 
 	ifp->bandwidth = bandwidth;
 
@@ -1421,7 +1465,7 @@ int lib_vrf_zebra_l3vni_id_modify(struct nb_cb_modify_args *args)
 		 * if zebra vrf already mapped to different vni id.
 		 */
 		pn_dnode = yang_dnode_get_parent(args->dnode, "vrf");
-		vrfname = yang_dnode_get_string(pn_dnode, "./name");
+		vrfname = yang_dnode_get_string(pn_dnode, "name");
 		zvrf = zebra_vrf_lookup_by_name(vrfname);
 		if (!zvrf) {
 			snprintf(args->errmsg, args->errmsg_len,

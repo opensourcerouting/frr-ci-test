@@ -55,9 +55,8 @@
 #define PEER_UPDGRP_CAP_FLAGS (PEER_CAP_AS4_RCV)
 
 #define PEER_UPDGRP_AF_CAP_FLAGS                                               \
-	(PEER_CAP_ORF_PREFIX_SM_RCV | PEER_CAP_ORF_PREFIX_SM_OLD_RCV           \
-	 | PEER_CAP_ADDPATH_AF_TX_ADV | PEER_CAP_ADDPATH_AF_RX_RCV             \
-	 | PEER_CAP_ENHE_AF_NEGO)
+	(PEER_CAP_ORF_PREFIX_SM_RCV | PEER_CAP_ADDPATH_AF_TX_ADV |             \
+	 PEER_CAP_ADDPATH_AF_RX_RCV | PEER_CAP_ENHE_AF_NEGO)
 
 enum bpacket_attr_vec_type { BGP_ATTR_VEC_NH = 0, BGP_ATTR_VEC_MAX };
 
@@ -429,7 +428,7 @@ extern void subgroup_announce_route(struct update_subgroup *subgrp);
 extern void subgroup_announce_all(struct update_subgroup *subgrp);
 
 extern void subgroup_default_originate(struct update_subgroup *subgrp,
-				       int withdraw);
+				       bool withdraw);
 extern void group_announce_route(struct bgp *bgp, afi_t afi, safi_t safi,
 				 struct bgp_dest *dest,
 				 struct bgp_path_info *pi);
@@ -585,11 +584,9 @@ static inline void bgp_announce_peer(struct peer *peer)
  */
 static inline int advertise_list_is_empty(struct update_subgroup *subgrp)
 {
-	if (bgp_adv_fifo_count(&subgrp->sync->update)
-	    || bgp_adv_fifo_count(&subgrp->sync->withdraw)
-	    || bgp_adv_fifo_count(&subgrp->sync->withdraw_low)) {
+	if (bgp_adv_fifo_count(&subgrp->sync->update) ||
+	    bgp_adv_fifo_count(&subgrp->sync->withdraw))
 		return 0;
-	}
 
 	return 1;
 }

@@ -11,6 +11,9 @@
 
 #ifdef HAVE_NETLINK
 
+#include <linux/rtnetlink.h>
+#include <linux/neighbour.h>
+
 #include "log.h"
 #include "rib.h"
 #include "vty.h"
@@ -286,6 +289,8 @@ static int netlink_route_info_fill(struct netlink_route_info *ri, int cmd,
 			break;
 
 		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
+			continue;
+		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_DUPLICATE))
 			continue;
 
 		if (nexthop->type == NEXTHOP_TYPE_BLACKHOLE) {

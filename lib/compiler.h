@@ -33,7 +33,7 @@ extern "C" {
 #  define _RET_NONNULL    , returns_nonnull
 #endif
 #if __has_attribute(fallthrough)
-#  define _FALLTHROUGH __attribute__((fallthrough));
+#  define fallthrough __attribute__((fallthrough));
 #endif
 # define _CONSTRUCTOR(x)  constructor(x)
 # define _DEPRECATED(x) deprecated(x)
@@ -57,7 +57,7 @@ extern "C" {
 #  define __has_attribute(x) 0
 #endif
 #if __GNUC__ >= 7
-#  define _FALLTHROUGH __attribute__((fallthrough));
+#  define fallthrough __attribute__((fallthrough));
 #endif
 #endif
 
@@ -112,14 +112,22 @@ extern "C" {
 #ifndef _ALLOC_SIZE
 # define _ALLOC_SIZE(x)
 #endif
-#ifndef _FALLTHROUGH
-#define _FALLTHROUGH
+#ifndef fallthrough
+#define fallthrough
 #endif
 #ifndef _DEPRECATED
 #define _DEPRECATED(x) deprecated
 #endif
 #ifndef assume
 #define assume(x)
+#endif
+
+#ifdef __COVERITY__
+/* __coverity_panic__() is named a bit poorly, it's essentially the same as
+ * __builtin_unreachable().  Used to eliminate false positives.
+ */
+#undef assume
+#define assume(x) do { if (!(x)) __coverity_panic__(); } while (0)
 #endif
 
 /* for helper functions defined inside macros */
@@ -416,10 +424,10 @@ _Static_assert(sizeof(_uint64_t) == 8 && sizeof(_int64_t) == 8,
  * type.)
  */
 #ifndef __cplusplus
-#define prefixtype(uname, typename, fieldname) typename *fieldname;
+#define uniontype(uname, typename, fieldname) typename *fieldname;
 #define TRANSPARENT_UNION __attribute__((transparent_union))
 #else
-#define prefixtype(uname, typename, fieldname)                                 \
+#define uniontype(uname, typename, fieldname)                                  \
 	typename *fieldname;                                                   \
 	uname(typename *x)                                                     \
 	{                                                                      \

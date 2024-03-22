@@ -40,6 +40,8 @@ def tgen(request):
         router.net.add_loop("lo-red")
         router.net.attach_iface_to_l3vrf("lo-red", "red")
         router.net.attach_iface_to_l3vrf(rname + "-eth1", "red")
+        #
+        # router.load_frr_config("frr.conf")
         # and select daemons to run
         router.load_config(TopoRouter.RD_ZEBRA, "zebra.conf")
         router.load_config(TopoRouter.RD_MGMTD)
@@ -68,7 +70,7 @@ def disable_debug(router):
     router.vtysh_cmd("no debug northbound callbacks configuration")
 
 
-@retry(retry_timeout=3, initial_wait=0.1)
+@retry(retry_timeout=30, initial_wait=0.1)
 def check_kernel(r1, super_prefix, count, add, is_blackhole, vrf, matchvia):
     network = ipaddress.ip_network(super_prefix)
     vrfstr = f" vrf {vrf}" if vrf else ""
@@ -181,10 +183,11 @@ def guts(tgen, vrf, use_cli):
 
     r1 = tgen.routers()["r1"]
 
-    step("add via gateway", reset=True)
-    do_config(r1, 1, True, False, vrf=vrf, use_cli=use_cli)
-    step("remove via gateway")
-    do_config(r1, 1, False, False, vrf=vrf, use_cli=use_cli)
+    count = 10
+    step(f"add {count} via gateway", reset=True)
+    do_config(r1, count, True, False, vrf=vrf, use_cli=use_cli)
+    step(f"remove {count} via gateway")
+    do_config(r1, count, False, False, vrf=vrf, use_cli=use_cli)
 
     via = f"lo-{vrf}" if vrf else "lo"
     step("add via loopback")

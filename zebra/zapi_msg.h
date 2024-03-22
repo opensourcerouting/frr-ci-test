@@ -53,12 +53,11 @@ extern int zsend_interface_update(int cmd, struct zserv *client,
 				  struct interface *ifp);
 extern int zsend_redistribute_route(int cmd, struct zserv *zclient,
 				    const struct route_node *rn,
-				    const struct route_entry *re);
+				    const struct route_entry *re,
+				    bool is_table_direct);
 
 extern int zsend_router_id_update(struct zserv *zclient, afi_t afi,
 				  struct prefix *p, vrf_id_t vrf_id);
-extern int zsend_interface_vrf_update(struct zserv *zclient,
-				      struct interface *ifp, vrf_id_t vrf_id);
 extern int zsend_interface_link_params(struct zserv *zclient,
 				       struct interface *ifp);
 extern int zsend_pw_update(struct zserv *client, struct zebra_pw *pw);

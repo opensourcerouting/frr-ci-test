@@ -19,6 +19,9 @@
 #include <string.h>
 
 #include "lib/zebra.h"
+
+#include <linux/rtnetlink.h>
+
 #include "lib/json.h"
 #include "lib/libfrr.h"
 #include "lib/frratomic.h"
@@ -44,6 +47,12 @@
 #define SOUTHBOUND_DEFAULT_ADDR INADDR_LOOPBACK
 #define SOUTHBOUND_DEFAULT_PORT 2620
 
+/*
+ * Time in seconds that if the other end is not responding
+ * something terrible has gone wrong.  Let's fix that.
+ */
+#define DPLANE_FPM_NL_WEDGIE_TIME 15
+
 /**
  * FPM header:
  * {
@@ -65,6 +74,7 @@ struct fpm_nl_ctx {
 	bool disabled;
 	bool connecting;
 	bool use_nhg;
+	bool use_route_replace;
 	struct sockaddr_storage addr;
 
 	/* data plane buffers. */
@@ -89,6 +99,7 @@ struct fpm_nl_ctx {
 	struct event *t_event;
 	struct event *t_nhg;
 	struct event *t_dequeue;
+	struct event *t_wedged;
 
 	/* zebra events. */
 	struct event *t_lspreset;
@@ -282,6 +293,25 @@ DEFUN(no_fpm_use_nhg, no_fpm_use_nhg_cmd,
 	return CMD_SUCCESS;
 }
 
+DEFUN(fpm_use_route_replace, fpm_use_route_replace_cmd,
+      "fpm use-route-replace",
+      FPM_STR
+      "Use netlink route replace semantics\n")
+{
+	gfnc->use_route_replace = true;
+	return CMD_SUCCESS;
+}
+
+DEFUN(no_fpm_use_route_replace, no_fpm_use_route_replace_cmd,
+      "no fpm use-route-replace",
+      NO_STR
+      FPM_STR
+      "Use netlink route replace semantics\n")
+{
+	gfnc->use_route_replace = false;
+	return CMD_SUCCESS;
+}
+
 DEFUN(fpm_reset_counters, fpm_reset_counters_cmd,
       "clear fpm counters",
       CLEAR_STR
@@ -393,6 +423,11 @@ static int fpm_write_config(struct vty *vty)
 
 	if (!gfnc->use_nhg) {
 		vty_out(vty, "no fpm use-next-hop-groups\n");
+		written = 1;
+	}
+
+	if (!gfnc->use_route_replace) {
+		vty_out(vty, "no fpm use-route-replace\n");
 		written = 1;
 	}
 
@@ -587,7 +622,8 @@ static void fpm_read(struct event *t)
 		switch (hdr->nlmsg_type) {
 		case RTM_NEWROUTE:
 			ctx = dplane_ctx_alloc();
-			dplane_ctx_set_op(ctx, DPLANE_OP_ROUTE_NOTIFY);
+			dplane_ctx_route_init(ctx, DPLANE_OP_ROUTE_NOTIFY, NULL,
+					      NULL);
 			if (netlink_route_change_read_unicast_internal(
 				    hdr, 0, false, ctx) != 1) {
 				dplane_ctx_fini(&ctx);
@@ -806,12 +842,20 @@ static int fpm_nl_enqueue(struct fpm_nl_ctx *fnc, struct zebra_dplane_ctx *ctx)
 
 	frr_mutex_lock_autounlock(&fnc->obuf_mutex);
 
+	/*
+	 * If route replace is enabled then directly encode the install which
+	 * is going to use `NLM_F_REPLACE` (instead of delete/add operations).
+	 */
+	if (fnc->use_route_replace && op == DPLANE_OP_ROUTE_UPDATE)
+		op = DPLANE_OP_ROUTE_INSTALL;
+
 	switch (op) {
 	case DPLANE_OP_ROUTE_UPDATE:
 	case DPLANE_OP_ROUTE_DELETE:
 		rv = netlink_route_multipath_msg_encode(RTM_DELROUTE, ctx,
 							nl_buf, sizeof(nl_buf),
-							true, fnc->use_nhg);
+							true, fnc->use_nhg,
+							false);
 		if (rv <= 0) {
 			zlog_err(
 				"%s: netlink_route_multipath_msg_encode failed",
@@ -825,11 +869,14 @@ static int fpm_nl_enqueue(struct fpm_nl_ctx *fnc, struct zebra_dplane_ctx *ctx)
 		if (op == DPLANE_OP_ROUTE_DELETE)
 			break;
 
-		/* FALL THROUGH */
+		fallthrough;
 	case DPLANE_OP_ROUTE_INSTALL:
-		rv = netlink_route_multipath_msg_encode(
-			RTM_NEWROUTE, ctx, &nl_buf[nl_buf_len],
-			sizeof(nl_buf) - nl_buf_len, true, fnc->use_nhg);
+		rv = netlink_route_multipath_msg_encode(RTM_NEWROUTE, ctx,
+							&nl_buf[nl_buf_len],
+							sizeof(nl_buf) -
+								nl_buf_len,
+							true, fnc->use_nhg,
+							fnc->use_route_replace);
 		if (rv <= 0) {
 			zlog_err(
 				"%s: netlink_route_multipath_msg_encode failed",
@@ -932,7 +979,9 @@ static int fpm_nl_enqueue(struct fpm_nl_ctx *fnc, struct zebra_dplane_ctx *ctx)
 	case DPLANE_OP_TC_FILTER_ADD:
 	case DPLANE_OP_TC_FILTER_DELETE:
 	case DPLANE_OP_TC_FILTER_UPDATE:
+	case DPLANE_OP_SRV6_ENCAP_SRCADDR_SET:
 	case DPLANE_OP_NONE:
+	case DPLANE_OP_STARTUP_STAGE:
 		break;
 
 	}
@@ -1326,6 +1375,18 @@ static void fpm_rmac_reset(struct event *t)
 			&fnc->t_rmacwalk);
 }
 
+static void fpm_process_wedged(struct event *t)
+{
+	struct fpm_nl_ctx *fnc = EVENT_ARG(t);
+
+	zlog_warn("%s: Connection unable to write to peer for over %u seconds, resetting",
+		  __func__, DPLANE_FPM_NL_WEDGIE_TIME);
+
+	atomic_fetch_add_explicit(&fnc->counters.connection_errors, 1,
+				  memory_order_relaxed);
+	FPM_RECONNECT(fnc);
+}
+
 static void fpm_process_queue(struct event *t)
 {
 	struct fpm_nl_ctx *fnc = EVENT_ARG(t);
@@ -1370,9 +1431,13 @@ static void fpm_process_queue(struct event *t)
 				  processed_contexts, memory_order_relaxed);
 
 	/* Re-schedule if we ran out of buffer space */
-	if (no_bufs)
-		event_add_timer(fnc->fthread->master, fpm_process_queue, fnc, 0,
+	if (no_bufs) {
+		event_add_event(fnc->fthread->master, fpm_process_queue, fnc, 0,
 				&fnc->t_dequeue);
+		event_add_timer(fnc->fthread->master, fpm_process_wedged, fnc,
+				DPLANE_FPM_NL_WEDGIE_TIME, &fnc->t_wedged);
+	} else
+		EVENT_OFF(fnc->t_wedged);
 
 	/*
 	 * Let the dataplane thread know if there are items in the
@@ -1467,6 +1532,7 @@ static int fpm_nl_start(struct zebra_dplane_provider *prov)
 
 	/* Set default values. */
 	fnc->use_nhg = true;
+	fnc->use_route_replace = true;
 
 	return 0;
 }
@@ -1575,7 +1641,7 @@ static int fpm_nl_process(struct zebra_dplane_provider *prov)
 	if (atomic_load_explicit(&fnc->counters.ctxqueue_len,
 				 memory_order_relaxed)
 	    > 0)
-		event_add_timer(fnc->fthread->master, fpm_process_queue, fnc, 0,
+		event_add_event(fnc->fthread->master, fpm_process_queue, fnc, 0,
 				&fnc->t_dequeue);
 
 	/* Ensure dataplane thread is rescheduled if we hit the work limit */
@@ -1607,6 +1673,8 @@ static int fpm_nl_new(struct event_loop *tm)
 	install_element(CONFIG_NODE, &no_fpm_set_address_cmd);
 	install_element(CONFIG_NODE, &fpm_use_nhg_cmd);
 	install_element(CONFIG_NODE, &no_fpm_use_nhg_cmd);
+	install_element(CONFIG_NODE, &fpm_use_route_replace_cmd);
+	install_element(CONFIG_NODE, &no_fpm_use_route_replace_cmd);
 
 	return 0;
 }

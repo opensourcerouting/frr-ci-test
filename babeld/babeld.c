@@ -108,14 +108,14 @@ babel_config_write (struct vty *vty)
     /* list redistributed protocols */
     for (afi = AFI_IP; afi <= AFI_IP6; afi++) {
         for (i = 0; i < ZEBRA_ROUTE_MAX; i++) {
-            if (i != zclient->redist_default &&
-                vrf_bitmap_check (zclient->redist[afi][i], VRF_DEFAULT)) {
-                vty_out (vty, " redistribute %s %s\n",
-                         (afi == AFI_IP) ? "ipv4" : "ipv6",
-                         zebra_route_string(i));
-                lines++;
-            }
-        }
+		if (i != zclient->redist_default &&
+		    vrf_bitmap_check(&zclient->redist[afi][i], VRF_DEFAULT)) {
+			vty_out(vty, " redistribute %s %s\n",
+				(afi == AFI_IP) ? "ipv4" : "ipv6",
+				zebra_route_string(i));
+			lines++;
+		}
+	}
     }
 
     lines += config_write_distribute (vty, babel_routing_process->distribute_ctx);
@@ -242,7 +242,7 @@ babel_get_myid(void)
     /* We failed to get a global EUI64 from the interfaces we were given.
      Let's try to find an interface with a MAC address. */
     for(i = 1; i < 256; i++) {
-        char buf[INTERFACE_NAMSIZ], *ifname;
+        char buf[IFNAMSIZ], *ifname;
         unsigned char eui[8];
         ifname = if_indextoname(i, buf);
         if(ifname == NULL)

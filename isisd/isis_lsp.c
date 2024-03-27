@@ -703,7 +703,7 @@ void lspid_print(uint8_t *lsp_id, char *dest, size_t dest_len, char dynhost,
 	else if (!memcmp(isis->sysid, lsp_id, ISIS_SYS_ID_LEN) && dynhost)
 		snprintf(id, sizeof(id), "%.14s", cmd_hostname_get());
 	else
-		snprintf(id, sizeof(id), "%pSY", lsp_id);
+		snprintfrr(id, sizeof(id), "%pSY", lsp_id);
 
 	if (frag)
 		snprintf(dest, dest_len, "%s.%02x-%02x", id,
@@ -1210,6 +1210,62 @@ static void lsp_build(struct isis_lsp *lsp, struct isis_area *area)
 			/* And finally MSD */
 			rcap->msd = srdb->config.msd;
 		}
+
+		/* Add SRv6 Sub-TLVs if SRv6 is enabled */
+		if (area->srv6db.config.enabled) {
+			struct isis_srv6_db *srv6db = &area->srv6db;
+
+			rcap->srv6_cap.is_srv6_capable = true;
+
+			/* SRv6 flags */
+			rcap->srv6_cap.flags = 0;
+
+			/* And finally MSDs */
+			rcap->srv6_msd.max_seg_left_msd =
+				srv6db->config.max_seg_left_msd;
+			rcap->srv6_msd.max_end_pop_msd =
+				srv6db->config.max_end_pop_msd;
+			rcap->srv6_msd.max_h_encaps_msd =
+				srv6db->config.max_h_encaps_msd;
+			rcap->srv6_msd.max_end_d_msd =
+				srv6db->config.max_end_d_msd;
+		} else {
+			rcap->srv6_cap.is_srv6_capable = false;
+		}
+	}
+
+	/* Add SRv6 Locator TLV. */
+	if (area->srv6db.config.enabled &&
+	    !list_isempty(area->srv6db.srv6_locator_chunks)) {
+		struct isis_srv6_locator locator = {};
+		struct srv6_locator_chunk *chunk;
+
+		/* TODO: support more than one locator */
+		chunk = (struct srv6_locator_chunk *)listgetdata(
+			listhead(area->srv6db.srv6_locator_chunks));
+
+		locator.metric = 0;
+		locator.prefix = chunk->prefix;
+		locator.flags = 0;
+		locator.algorithm = 0;
+
+		struct listnode *sid_node;
+		struct isis_srv6_sid *sid;
+		locator.srv6_sid = list_new();
+		for (ALL_LIST_ELEMENTS_RO(area->srv6db.srv6_sids, sid_node,
+					  sid)) {
+			listnode_add(locator.srv6_sid, sid);
+		}
+
+		isis_tlvs_add_srv6_locator(lsp->tlvs, 0, &locator);
+		lsp_debug("ISIS (%s): Adding SRv6 Locator information",
+			  area->area_tag);
+
+		list_delete(&locator.srv6_sid);
+
+		isis_tlvs_add_ipv6_reach(lsp->tlvs,
+					 isis_area_ipv6_topology(area),
+					 &chunk->prefix, 0, false, NULL);
 	}
 
 	/* IPv4 address and TE router ID TLVs.

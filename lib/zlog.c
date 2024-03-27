@@ -4,6 +4,12 @@
  */
 
 #include "zebra.h"
+#include <sys/stat.h>
+#include <fcntl.h>
+
+#ifdef HAVE_GLIBC_BACKTRACE
+#include <execinfo.h>
+#endif /* HAVE_GLIBC_BACKTRACE */
 
 #include <unistd.h>
 #include <sys/time.h>
@@ -31,9 +37,6 @@
 #endif
 #ifdef __DragonFly__
 #include <sys/lwp.h>
-#endif
-#ifdef __APPLE__
-#include <mach/mach_traps.h>
 #endif
 
 #ifdef HAVE_LIBUNWIND

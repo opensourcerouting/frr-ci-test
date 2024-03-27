@@ -52,6 +52,7 @@ zebra_zebra_SOURCES = \
 	zebra/redistribute.c \
 	zebra/router-id.c \
 	zebra/rt_netlink.c \
+	zebra/ge_netlink.c \
 	zebra/rt_socket.c \
 	zebra/rtadv.c \
 	zebra/rtread_netlink.c \
@@ -124,6 +125,7 @@ clippy_scan += \
 	zebra/zebra_srv6_vty.c \
 	zebra/zebra_vrf.c \
 	zebra/dpdk/zebra_dplane_dpdk_vty.c \
+	zebra/label_manager.c \
 	# end
 
 noinst_HEADERS += \
@@ -143,6 +145,7 @@ noinst_HEADERS += \
 	zebra/router-id.h \
 	zebra/rt.h \
 	zebra/rt_netlink.h \
+	zebra/ge_netlink.h \
 	zebra/rtadv.h \
 	zebra/rule_netlink.h \
 	zebra/table_manager.h \

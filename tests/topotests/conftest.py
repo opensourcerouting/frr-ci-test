@@ -4,6 +4,7 @@ Topotest conftest.py file.
 """
 # pylint: disable=consider-using-f-string
 
+import contextlib
 import glob
 import logging
 import os
@@ -12,6 +13,7 @@ import resource
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import lib.fixtures
 import pytest
@@ -24,7 +26,7 @@ from munet.base import Commander, proc_error
 from munet.cleanup import cleanup_current, cleanup_previous
 from munet.config import ConfigOptionsProxy
 from munet.testing.util import pause_test
-
+from lib.common_config import generate_support_bundle
 from lib import topolog, topotest
 
 try:
@@ -39,6 +41,30 @@ try:
 
 except (AttributeError, ImportError):
     pass
+
+
+# Remove this and use munet version when we move to pytest_asyncio
+@contextlib.contextmanager
+def chdir(ndir, desc=""):
+    odir = os.getcwd()
+    os.chdir(ndir)
+    if desc:
+        logging.debug("%s: chdir from %s to %s", desc, odir, ndir)
+    try:
+        yield
+    finally:
+        if desc:
+            logging.debug("%s: chdir back from %s to %s", desc, ndir, odir)
+        os.chdir(odir)
+
+
+@contextlib.contextmanager
+def log_handler(basename, logpath):
+    topolog.logstart(basename, logpath)
+    try:
+        yield
+    finally:
+        topolog.logfinish(basename, logpath)
 
 
 def pytest_addoption(parser):
@@ -74,6 +100,12 @@ def pytest_addoption(parser):
         "--gdb-routers",
         metavar="ROUTER[,ROUTER...]",
         help="Comma-separated list of routers to spawn gdb on, or 'all'",
+    )
+
+    parser.addoption(
+        "--gdb-use-emacs",
+        action="store_true",
+        help="Use emacsclient to run gdb instead of a shell",
     )
 
     parser.addoption(
@@ -141,6 +173,24 @@ def pytest_addoption(parser):
         help="Options to pass to `perf record`.",
     )
 
+    parser.addoption(
+        "--rr-daemons",
+        metavar="DAEMON[,DAEMON...]",
+        help="Comma-separated list of daemons to run `rr` on, or 'all'",
+    )
+
+    parser.addoption(
+        "--rr-routers",
+        metavar="ROUTER[,ROUTER...]",
+        help="Comma-separated list of routers to run `rr` on, or 'all'",
+    )
+
+    parser.addoption(
+        "--rr-options",
+        metavar="OPTS",
+        help="Options to pass to `rr record`.",
+    )
+
     rundir_help = "directory for running in and log files"
     parser.addini("rundir", rundir_help, default="/tmp/topotests")
     parser.addoption("--rundir", metavar="DIR", help=rundir_help)
@@ -174,6 +224,12 @@ def pytest_addoption(parser):
         "--valgrind-extra",
         action="store_true",
         help="Generate suppression file, and enable more precise (slower) valgrind checks",
+    )
+
+    parser.addoption(
+        "--valgrind-leak-kinds",
+        metavar="KIND[,KIND...]",
+        help="Comma-separated list of valgrind leak kinds or 'all'",
     )
 
     parser.addoption(
@@ -271,6 +327,70 @@ def check_for_memleaks():
         pytest.fail("memleaks found for daemons: " + " ".join(daemons))
 
 
+def check_for_core_dumps():
+    tgen = get_topogen()  # pylint: disable=redefined-outer-name
+    if not tgen:
+        return
+
+    if not hasattr(tgen, "existing_core_files"):
+        tgen.existing_core_files = set()
+    existing = tgen.existing_core_files
+
+    cores = glob.glob(os.path.join(tgen.logdir, "*/*.dmp"))
+    latest = {x for x in cores if x not in existing}
+    if latest:
+        existing |= latest
+        tgen.existing_core_files = existing
+
+        emsg = "New core[s] found: " + ", ".join(latest)
+        logger.error(emsg)
+        pytest.fail(emsg)
+
+
+def check_for_backtraces():
+    tgen = get_topogen()  # pylint: disable=redefined-outer-name
+    if not tgen:
+        return
+
+    if not hasattr(tgen, "existing_backtrace_files"):
+        tgen.existing_backtrace_files = {}
+    existing = tgen.existing_backtrace_files
+
+    latest = glob.glob(os.path.join(tgen.logdir, "*/*.log"))
+    backtraces = []
+    for vfile in latest:
+        with open(vfile, encoding="ascii") as vf:
+            vfcontent = vf.read()
+            btcount = vfcontent.count("Backtrace:")
+        if not btcount:
+            continue
+        if vfile not in existing:
+            existing[vfile] = 0
+        if btcount == existing[vfile]:
+            continue
+        existing[vfile] = btcount
+        backtraces.append(vfile)
+
+    if backtraces:
+        emsg = "New backtraces found in: " + ", ".join(backtraces)
+        logger.error(emsg)
+        pytest.fail(emsg)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def module_autouse(request):
+    basename = get_test_logdir(request.node.nodeid, True)
+    logdir = Path(topotest.g_pytest_config.option.rundir) / basename
+    logpath = logdir / "exec.log"
+
+    subprocess.check_call("mkdir -p -m 1777 {}".format(logdir), shell=True)
+
+    with log_handler(basename, logpath):
+        sdir = os.path.dirname(os.path.realpath(request.fspath))
+        with chdir(sdir, "module autouse fixture"):
+            yield
+
+
 @pytest.fixture(autouse=True, scope="module")
 def module_check_memtest(request):
     yield
@@ -282,14 +402,19 @@ def module_check_memtest(request):
             check_for_memleaks()
 
 
-def pytest_runtest_logstart(nodeid, location):
-    # location is (filename, lineno, testname)
-    topolog.logstart(nodeid, location, topotest.g_pytest_config.option.rundir)
-
-
-def pytest_runtest_logfinish(nodeid, location):
-    # location is (filename, lineno, testname)
-    topolog.logfinish(nodeid, location)
+#
+# Disable per test function logging as FRR CI system can't handle it.
+#
+# @pytest.fixture(autouse=True, scope="function")
+# def function_autouse(request):
+#     # For tests we actually use the logdir name as the logfile base
+#     logbase = get_test_logdir(nodeid=request.node.nodeid, module=False)
+#     logbase = os.path.join(topotest.g_pytest_config.option.rundir, logbase)
+#     logpath = Path(logbase)
+#     path = Path(f"{logpath.parent}/exec-{logpath.name}.log")
+#     subprocess.check_call("mkdir -p -m 1777 {}".format(logpath.parent), shell=True)
+#     with log_handler(request.node.nodeid, path):
+#         yield
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -304,9 +429,13 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     # Let the default pytest_runtest_call execute the test function
     yield
 
+    check_for_backtraces()
+    check_for_core_dumps()
+
     # Check for leaks if requested
     if item.config.option.valgrind_memleaks:
         check_for_valgrind_memleaks()
+
     if item.config.option.memleaks:
         check_for_memleaks()
 
@@ -340,8 +469,10 @@ def pytest_configure(config):
         os.environ["PYTEST_TOPOTEST_WORKER"] = ""
         is_xdist = os.environ["PYTEST_XDIST_MODE"] != "no"
         is_worker = False
+        wname = ""
     else:
-        os.environ["PYTEST_TOPOTEST_WORKER"] = os.environ["PYTEST_XDIST_WORKER"]
+        wname = os.environ["PYTEST_XDIST_WORKER"]
+        os.environ["PYTEST_TOPOTEST_WORKER"] = wname
         is_xdist = True
         is_worker = True
 
@@ -374,6 +505,16 @@ def pytest_configure(config):
     # Set the log_file (exec) to inside the rundir if not specified
     if not config.getoption("--log-file") and not config.getini("log_file"):
         config.option.log_file = os.path.join(rundir, "exec.log")
+
+    # Handle pytest-xdist each worker get's it's own top level log file
+    # `exec-worker-N.log`
+    if wname:
+        wname = wname.replace("gw", "worker-")
+        cpath = Path(config.option.log_file).absolute()
+        config.option.log_file = f"{cpath.parent}/{cpath.stem}-{wname}{cpath.suffix}"
+    elif is_xdist:
+        cpath = Path(config.option.log_file).absolute()
+        config.option.log_file = f"{cpath.parent}/{cpath.stem}-xdist{cpath.suffix}"
 
     # Turn on live logging if user specified verbose and the config has a CLI level set
     if config.getoption("--verbose") and not is_xdist and not config.getini("log_cli"):
@@ -433,6 +574,10 @@ def pytest_configure(config):
 
 @pytest.fixture(autouse=True, scope="session")
 def setup_session_auto():
+    # Aligns logs nicely
+    logging.addLevelName(logging.WARNING, " WARN")
+    logging.addLevelName(logging.INFO, " INFO")
+
     if "PYTEST_TOPOTEST_WORKER" not in os.environ:
         is_worker = False
     elif not os.environ["PYTEST_TOPOTEST_WORKER"]:
@@ -453,6 +598,10 @@ def pytest_runtest_setup(item):
     module = item.parent.module
     script_dir = os.path.abspath(os.path.dirname(module.__file__))
     os.environ["PYTEST_TOPOTEST_SCRIPTDIR"] = script_dir
+
+
+def pytest_exception_interact(node, call, report):
+    generate_support_bundle()
 
 
 def pytest_runtest_makereport(item, call):

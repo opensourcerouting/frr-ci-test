@@ -5,6 +5,7 @@
  */
 
 #include <zebra.h>
+#include <sys/ioctl.h>
 
 #include "if.h"
 #include "vrf.h"
@@ -384,54 +385,80 @@ static void vrf_hash_bitmap_free(void *data)
 	XFREE(MTYPE_VRF_BITMAP, bit);
 }
 
-vrf_bitmap_t vrf_bitmap_init(void)
+void vrf_bitmap_init(vrf_bitmap_t *pbmap)
 {
-	return hash_create_size(32, vrf_hash_bitmap_key, vrf_hash_bitmap_cmp,
-				"VRF BIT HASH");
+	*pbmap = NULL;
 }
 
-void vrf_bitmap_free(vrf_bitmap_t bmap)
+void vrf_bitmap_free(vrf_bitmap_t *pbmap)
 {
-	struct hash *vrf_hash = bmap;
+	struct hash *vrf_hash;
+
+	if (!*pbmap)
+		return;
+
+	vrf_hash = *pbmap;
 
 	hash_clean_and_free(&vrf_hash, vrf_hash_bitmap_free);
 }
 
-void vrf_bitmap_set(vrf_bitmap_t bmap, vrf_id_t vrf_id)
+void vrf_bitmap_set(vrf_bitmap_t *pbmap, vrf_id_t vrf_id)
 {
 	struct vrf_bit_set lookup = { .vrf_id = vrf_id };
-	struct hash *vrf_hash = bmap;
+	struct hash *vrf_hash;
 	struct vrf_bit_set *bit;
 
-	if (vrf_hash == NULL || vrf_id == VRF_UNKNOWN)
+	if (vrf_id == VRF_UNKNOWN)
 		return;
+
+	if (!*pbmap)
+		*pbmap = vrf_hash =
+			hash_create_size(2, vrf_hash_bitmap_key,
+					 vrf_hash_bitmap_cmp, "VRF BIT HASH");
+	else
+		vrf_hash = *pbmap;
 
 	bit = hash_get(vrf_hash, &lookup, vrf_hash_bitmap_alloc);
 	bit->set = true;
 }
 
-void vrf_bitmap_unset(vrf_bitmap_t bmap, vrf_id_t vrf_id)
+void vrf_bitmap_unset(vrf_bitmap_t *pbmap, vrf_id_t vrf_id)
 {
 	struct vrf_bit_set lookup = { .vrf_id = vrf_id };
-	struct hash *vrf_hash = bmap;
+	struct hash *vrf_hash;
 	struct vrf_bit_set *bit;
 
-	if (vrf_hash == NULL || vrf_id == VRF_UNKNOWN)
+	if (vrf_id == VRF_UNKNOWN)
 		return;
 
-	bit = hash_get(vrf_hash, &lookup, vrf_hash_bitmap_alloc);
+	/*
+	 * If the hash is not created then unsetting is unnecessary
+	 */
+	if (!*pbmap)
+		return;
+
+	vrf_hash = *pbmap;
+
+	/*
+	 * If we can't look it up, no need to unset it!
+	 */
+	bit = hash_lookup(vrf_hash, &lookup);
+	if (!bit)
+		return;
+
 	bit->set = false;
 }
 
-int vrf_bitmap_check(vrf_bitmap_t bmap, vrf_id_t vrf_id)
+int vrf_bitmap_check(vrf_bitmap_t *pbmap, vrf_id_t vrf_id)
 {
 	struct vrf_bit_set lookup = { .vrf_id = vrf_id };
-	struct hash *vrf_hash = bmap;
+	struct hash *vrf_hash;
 	struct vrf_bit_set *bit;
 
-	if (vrf_hash == NULL || vrf_id == VRF_UNKNOWN)
+	if (!*pbmap || vrf_id == VRF_UNKNOWN)
 		return 0;
 
+	vrf_hash = *pbmap;
 	bit = hash_lookup(vrf_hash, &lookup);
 	if (bit)
 		return bit->set;
@@ -888,7 +915,7 @@ static int lib_vrf_create(struct nb_cb_create_args *args)
 	const char *vrfname;
 	struct vrf *vrfp;
 
-	vrfname = yang_dnode_get_string(args->dnode, "./name");
+	vrfname = yang_dnode_get_string(args->dnode, "name");
 
 	if (args->event != NB_EV_APPLY)
 		return NB_OK;
@@ -961,6 +988,19 @@ static const void *lib_vrf_lookup_entry(struct nb_cb_lookup_entry_args *args)
 	return vrf;
 }
 
+static const void *lib_vrf_lookup_next(struct nb_cb_lookup_entry_args *args)
+{
+	const char *vrfname = args->keys->key[0];
+	struct vrf vrfkey, *vrf;
+
+	strlcpy(vrfkey.name, vrfname, sizeof(vrfkey.name));
+	vrf = RB_FIND(vrf_name_head, &vrfs_by_name, &vrfkey);
+	if (!strcmp(vrf->name, vrfname))
+		vrf = RB_NEXT(vrf_name_head, vrf);
+
+	return vrf;
+}
+
 /*
  * XPath: /frr-vrf:lib/vrf/id
  */
@@ -998,6 +1038,7 @@ const struct frr_yang_module_info frr_vrf_info = {
 				.get_next = lib_vrf_get_next,
 				.get_keys = lib_vrf_get_keys,
 				.lookup_entry = lib_vrf_lookup_entry,
+				.lookup_next = lib_vrf_lookup_next,
 			},
 			.priority = NB_DFLT_PRIORITY - 2,
 		},

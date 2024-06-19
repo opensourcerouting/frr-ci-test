@@ -132,9 +132,8 @@ static void bgp_send_fec_register_label_msg(struct bgp_dest *dest, bool reg,
 		return;
 
 	if (BGP_DEBUG(labelpool, LABELPOOL))
-		zlog_debug("%s: FEC %sregister %pRN label_index=%u label=%u",
-			   __func__, reg ? "" : "un", bgp_dest_to_rnode(dest),
-			   label_index, label);
+		zlog_debug("%s: FEC %sregister %pBD label_index=%u label=%u",
+			   __func__, reg ? "" : "un", dest, label_index, label);
 	/* If the route node has a local_label assigned or the
 	 * path node has an MPLS SR label index allowing zebra to
 	 * derive the label, proceed with registration. */
@@ -195,11 +194,12 @@ int bgp_reg_for_label_callback(mpls_label_t new_label, void *labelid,
 		return -1;
 	}
 
-	bgp_dest_unlock_node(dest);
+	dest = bgp_dest_unlock_node(dest);
+	assert(dest);
 
 	if (BGP_DEBUG(labelpool, LABELPOOL))
-		zlog_debug("%s: FEC %pRN label=%u, allocated=%d", __func__,
-			   bgp_dest_to_rnode(dest), new_label, allocated);
+		zlog_debug("%s: FEC %pBD label=%u, allocated=%d", __func__,
+			   dest, new_label, allocated);
 
 	if (!allocated) {
 		/*
@@ -469,4 +469,21 @@ int bgp_nlri_parse_label(struct peer *peer, struct attr *attr,
 	}
 
 	return BGP_NLRI_PARSE_OK;
+}
+
+bool bgp_labels_same(const mpls_label_t *tbl_a, const uint32_t num_labels_a,
+		     const mpls_label_t *tbl_b, const uint32_t num_labels_b)
+{
+	uint32_t i;
+
+	if (num_labels_a != num_labels_b)
+		return false;
+	if (num_labels_a == 0)
+		return true;
+
+	for (i = 0; i < num_labels_a; i++) {
+		if (tbl_a[i] != tbl_b[i])
+			return false;
+	}
+	return true;
 }

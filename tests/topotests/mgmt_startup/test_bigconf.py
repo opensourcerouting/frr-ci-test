@@ -21,8 +21,7 @@ from util import check_kernel, check_vtysh_up, write_big_route_conf
 
 CWD = os.path.dirname(os.path.realpath(__file__))
 
-# pytestmark = [pytest.mark.staticd, pytest.mark.mgmtd]
-pytestmark = [pytest.mark.staticd]
+pytestmark = [pytest.mark.staticd, pytest.mark.mgmtd]
 
 
 track = Timeout(0)
@@ -42,8 +41,10 @@ def tgen(request):
     tgen = Topogen(topodef, request.module.__name__)
     tgen.start_topology()
 
+    prologue = open(f"{CWD}/r1/mgmtd.conf").read()
+
     confpath = f"{tgen.gears['r1'].gearlogdir}/r1-late-big.conf"
-    start, end = write_big_route_conf("10.0.0.0/8", ROUTE_COUNT, confpath)
+    start, end = write_big_route_conf("10.0.0.0/8", ROUTE_COUNT, confpath, prologue)
     ROUTE_RANGE[0] = start
     ROUTE_RANGE[1] = end
 
@@ -69,10 +70,10 @@ def test_staticd_latestart(tgen):
     check_vtysh_up(r1)
     logging.info("r1: vtysh connected after %ss", track.elapsed())
 
-    result = check_kernel(r1, ROUTE_RANGE[0], retry_timeout=20)
+    result = check_kernel(r1, ROUTE_RANGE[0], retry_timeout=60)
     assert result is None
     logging.info("r1: first route installed after %ss", track.elapsed())
 
-    result = check_kernel(r1, ROUTE_RANGE[1], retry_timeout=20)
+    result = check_kernel(r1, ROUTE_RANGE[1], retry_timeout=60)
     assert result is None
     logging.info("r1: last route installed after %ss", track.elapsed())

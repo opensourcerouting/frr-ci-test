@@ -5,6 +5,8 @@ Copyright 2011 by Matthieu Boutier and Juliusz Chroboczek
 
 /* include zebra library */
 #include <zebra.h>
+#include <fcntl.h>
+
 #include "getopt.h"
 #include "if.h"
 #include "log.h"
@@ -182,8 +184,10 @@ main(int argc, char **argv)
     change_smoothing_half_life(BABEL_DEFAULT_SMOOTHING_HALF_LIFE);
 
     /* init some quagga's dependencies, and babeld's commands */
-    if_zapi_callbacks(babel_ifp_create, babel_ifp_up,
-		      babel_ifp_down, babel_ifp_destroy);
+    hook_register_prio(if_real, 0, babel_ifp_create);
+    hook_register_prio(if_up, 0, babel_ifp_up);
+    hook_register_prio(if_down, 0, babel_ifp_down);
+    hook_register_prio(if_unreal, 0, babel_ifp_destroy);
     babeld_quagga_init();
     /* init zebra client's structure and it's commands */
     /* this replace kernel_setup && kernel_setup_socket */
@@ -306,6 +310,8 @@ babel_exit_properly(void)
     babel_save_state_file();
     debugf(BABEL_DEBUG_COMMON, "Remove pid file.");
     debugf(BABEL_DEBUG_COMMON, "Done.");
+
+    vrf_terminate();
     frr_fini();
 
     exit(0);

@@ -68,6 +68,12 @@ Besides the common invocation options (:ref:`common-invocation-options`), the
    option and we will use Route Replace Semantics instead of delete
    than add.
 
+.. option:: --routing-table <tableno>
+
+   Specify which kernel routing table *Zebra* should communicate with.
+   If this option is not specified the default table (RT_TABLE_MAIN) is
+   used.
+
 .. option:: --asic-offload=[notify_on_offload|notify_on_ack]
 
    The linux kernel has the ability to use asic-offload ( see switchdev
@@ -86,6 +92,13 @@ Besides the common invocation options (:ref:`common-invocation-options`), the
 
    Allow zebra to modify the default receive buffer size to SIZE
    in bytes.  Under \*BSD only the -s option is available.
+
+.. option:: --v6-with-v4-nexthops
+
+   Signal to zebra that v6 routes with v4 nexthops are accepted
+   by the underlying dataplane.  This will be communicated to
+   the upper level daemons that can install v6 routes with v4
+   nexthops.
 
 .. _interface-commands:
 
@@ -156,12 +169,13 @@ Standard Commands
    Set description for the interface.
 
 
-.. clicmd:: mpls enable
+.. clicmd:: mpls <enable|disable>
 
-   Enable or disable mpls kernel processing on the interface, for linux.  Interfaces
+   Choose mpls kernel processing value on the interface, for linux. Interfaces
    configured with mpls will not automatically turn on if mpls kernel modules do not
-   happen to be loaded.  This command will fail on 3.X linux kernels and does not
-   work on non-linux systems at all.
+   happen to be loaded. This command will fail on 3.X linux kernels and does not
+   work on non-linux systems at all. 'enable' and 'disable' will respectively turn
+   on and off mpls on the given interface.
 
 .. clicmd:: multicast
 
@@ -320,10 +334,14 @@ the default route.
    Allow IPv4 nexthop tracking to resolve via the default route. This parameter
    is configured per-VRF, so the command is also available in the VRF subnode.
 
+   This is enabled by default for a traditional profile.
+
 .. clicmd:: ipv6 nht resolve-via-default
 
    Allow IPv6 nexthop tracking to resolve via the default route. This parameter
    is configured per-VRF, so the command is also available in the VRF subnode.
+
+   This is enabled by default for a traditional profile.
 
 .. clicmd:: show ip nht [vrf NAME] [A.B.C.D|X:X::X:X] [mrib] [json]
 
@@ -355,6 +373,8 @@ outgoing interface
 .. clicmd:: pbr nexthop-resolve
 
    Resolve PBR nexthop via ip neigh tracking
+
+.. _administrative-distance:
 
 Administrative Distance
 =======================
@@ -402,15 +422,33 @@ the same distances that other routing suites have chosen.
 +------------+-----------+
 
 An admin distance of 255 indicates to Zebra that the route should not be
-installed into the Data Plane.  Additionally routes with an admin distance
+installed into the Data Plane. Additionally routes with an admin distance
 of 255 will not be redistributed.
 
 Zebra does treat Kernel routes as special case for the purposes of Admin
-Distance.  Upon learning about a route that is not originated by FRR
-we read the metric value as a uint32_t.  The top byte of the value
+Distance. Upon learning about a route that is not originated by FRR
+we read the metric value as a uint32_t. The top byte of the value
 is interpreted as the Administrative Distance and the low three bytes
-are read in as the metric.  This special case is to facilitate VRF
+are read in as the metric. This special case is to facilitate VRF
 default routes.
+
+.. code-block:: shell
+
+   $ # Set administrative distance to 255 for Zebra
+   $ ip route add 192.0.2.0/24 metric $(( 2**32 - 2**24 )) dev lo
+   $ vtysh -c 'show ip route 192.0.2.0/24 json' | jq '."192.0.2.0/24"[] | (.distance, .metric)'
+   255
+   0
+   $ # Set administrative distance to 192 for Zebra
+   $ ip route add 192.0.2.0/24 metric $(( 2**31 + 2**30 )) dev lo
+   $ vtysh -c 'show ip route 192.0.2.0/24 json' | jq '."192.0.2.0/24"[] | (.distance, .metric)'
+   192
+   0
+   $ # Set administrative distance to 128, and metric 100 for Zebra
+   $ ip route add 192.0.2.0/24 metric $(( 2**31 + 100 )) dev lo
+   $ vtysh -c 'show ip route 192.0.2.0/24 json' | jq '."192.0.2.0/24"[] | (.distance, .metric)'
+   128
+   100
 
 Route Replace Semantics
 =======================
@@ -745,6 +783,44 @@ presence of the entry.
    21     Static       10.125.0.2  IPv4 Explicit Null
 
 
+MPLS label chunks
+-----------------
+
+MPLS label chunks are handled in the zebra label manager service,
+which ensures a same label value or label chunk can not be used by
+multiple CP routing daemons at the same time.
+
+Label requests originate from CP routing daemons, and are resolved
+over the default MPLS range (16-1048575). There are two kind of
+requests:
+- Static label requests request an exact label value or range. For
+instance, segment routing label blocks requests originating from
+IS-IS are part of it.
+- Dynamic label requests only need a range of label values. The
+'bgp l3vpn export auto' command uses such requests.
+
+Allocated label chunks table can be dumped using the command
+
+.. clicmd:: show debugging label-table
+
+::
+
+   zebra# show debugging label-table
+   Proto ospf: [300/350]
+   Proto srte: [500/500]
+   Proto isis: [1200/1300]
+   Proto ospf: [20000/21000]
+   Proto isis: [22000/23000]
+
+.. clicmd:: mpls label dynamic-block (16-1048575) (16-1048575)
+
+   Define a range of labels where dynamic label requests will
+   allocate label chunks from. This command guarantees that
+   static label values outside that range will not conflict
+   with the dynamic label requests. When the dynamic-block
+   range is configured, static label requests that match that
+   range are not accepted.
+
 .. _zebra-srv6:
 
 Segment-Routing IPv6
@@ -761,6 +837,35 @@ In that case, user must configure initial srv6 setting on
 FRR's cli or frr.conf or zebra.conf. This section shows how
 to configure SRv6 on FRR. Of course SRv6 can be used as standalone,
 and this section also helps that case.
+
+.. clicmd:: show segment-routing srv6 manager [json]
+
+   This command dumps the SRv6 information configured on zebra, including
+   the encapsulation parameters (e.g., the IPv6 source address used for
+   the encapsulated packets).
+
+   Example::
+
+      router# sh segment-routing srv6 manager
+      Parameters:
+      Encapsulation:
+         Source Address:
+            Configured: fc00:0:1::1
+
+
+   To get the same information in json format, you can use the ``json`` keyword::
+
+      rose-srv6# sh segment-routing srv6 manager json
+      {
+        "parameters":{
+          "encapsulation":{
+            "sourceAddress":{
+              "configured":"fc00:0:1::1"
+            }
+          }
+        }
+      }
+
 
 .. clicmd:: show segment-routing srv6 locator [json]
 
@@ -921,6 +1026,14 @@ and this section also helps that case.
        behavior usid
       !
    ...
+
+.. clicmd:: encapsulation
+
+   Configure parameters for SRv6 encapsulation.
+
+.. clicmd:: source-address X:X::X:X
+
+   Configure the source address of the outer encapsulating IPv6 header.
 
 .. _multicast-rib-commands:
 
@@ -1220,6 +1333,12 @@ FPM Commands
    The ``no`` form uses the old known FPM behavior of including next hop
    information in the route (e.g. ``RTM_NEWROUTE``) messages.
 
+.. clicmd:: fpm use-route-replace
+
+   Use the netlink ``NLM_F_REPLACE`` flag for updating routes instead of
+   two different messages to update a route
+   (``RTM_DELROUTE`` + ``RTM_NEWROUTE``).
+
 .. clicmd:: show fpm counters [json]
 
    Show the FPM statistics (plain text or JSON formatted).
@@ -1376,8 +1495,6 @@ zebra Terminal Mode Commands
    If the ``json`` option is specified, output is displayed in JSON format.
 
 .. clicmd:: show ip prefix-list [NAME]
-
-.. clicmd:: show route-map [NAME]
 
 .. clicmd:: show ip protocol
 

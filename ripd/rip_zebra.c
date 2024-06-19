@@ -14,6 +14,8 @@
 #include "log.h"
 #include "vrf.h"
 #include "bfd.h"
+#include "frrdistance.h"
+
 #include "ripd/ripd.h"
 #include "ripd/rip_debug.h"
 #include "ripd/rip_interface.h"
@@ -222,7 +224,6 @@ static void rip_zebra_connected(struct zclient *zclient)
 zclient_handler *const rip_handlers[] = {
 	[ZEBRA_INTERFACE_ADDRESS_ADD] = rip_interface_address_add,
 	[ZEBRA_INTERFACE_ADDRESS_DELETE] = rip_interface_address_delete,
-	[ZEBRA_INTERFACE_VRF_UPDATE] = rip_interface_vrf_update,
 	[ZEBRA_REDISTRIBUTE_ROUTE_ADD] = rip_zebra_read_route,
 	[ZEBRA_REDISTRIBUTE_ROUTE_DEL] = rip_zebra_read_route,
 };

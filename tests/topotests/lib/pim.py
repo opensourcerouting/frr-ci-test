@@ -1,34 +1,34 @@
+# -*- coding: utf-8 eval: (blacken-mode 1) -*-
 # SPDX-License-Identifier: ISC
 # Copyright (c) 2019 by VMware, Inc. ("VMware")
 # Used Copyright (c) 2018 by Network Device Education Foundation, Inc.
 # ("NetDEF") in this file.
 
 import datetime
+import functools
 import os
 import re
 import sys
 import traceback
-import functools
 from copy import deepcopy
 from time import sleep
-from lib import topotest
-
 
 # Import common_config to use commomnly used APIs
 from lib.common_config import (
-    create_common_configurations,
     HostApplicationHelper,
     InvalidCLIError,
     create_common_configuration,
-    InvalidCLIError,
+    create_common_configurations,
+    get_frr_ipv6_linklocal,
     retry,
     run_frr_cmd,
     validate_ip_address,
-    get_frr_ipv6_linklocal,
 )
 from lib.micronet import get_exec_path
 from lib.topolog import logger
 from lib.topotest import frr_unicode
+
+from lib import topotest
 
 ####
 CWD = os.path.dirname(os.path.realpath(__file__))
@@ -149,7 +149,7 @@ def _add_pim_rp_config(tgen, topo, input_dict, router, build, config_data_dict):
         # At least one interface must be enabled for PIM on the router
         pim_if_enabled = False
         pim6_if_enabled = False
-        for destLink, data in topo[dut]["links"].items():
+        for _, data in topo[dut]["links"].items():
             if "pim" in data:
                 pim_if_enabled = True
             if "pim6" in data:
@@ -603,7 +603,7 @@ def find_rp_details(tgen, topo):
                 # ip address of RP
                 rp_addr = rp_dict["rp_addr"]
 
-                for link, data in topo["routers"][router]["links"].items():
+                for _, data in topo["routers"][router]["links"].items():
                     if data["ipv4"].split("/")[0] == rp_addr:
                         rp_details[router] = rp_addr
 
@@ -1132,7 +1132,7 @@ def verify_upstream_iif(
                                     grp_addr,
                                     in_interface,
                                     group_addr_json[src_address]["inboundInterface"],
-                                    joinState,
+                                    "Joined",
                                     group_addr_json[src_address]["joinState"],
                                 )
                             )
@@ -2089,7 +2089,7 @@ def verify_pim_interface(
                     )
                     return True
         else:
-            for destLink, data in topo["routers"][dut]["links"].items():
+            for _, data in topo["routers"][dut]["links"].items():
                 if "type" in data and data["type"] == "loopback":
                     continue
 
@@ -2292,7 +2292,7 @@ def clear_pim_interfaces(tgen, dut):
 
     # Waiting for maximum 60 sec
     fail_intf = []
-    for retry in range(1, 13):
+    for _ in range(1, 13):
         sleep(5)
         logger.info("[DUT: %s]: Waiting for 5 sec for PIM neighbors" " to come up", dut)
         run_json_after = run_frr_cmd(rnode, "show ip pim neighbor json", isjson=True)
@@ -2368,7 +2368,7 @@ def clear_igmp_interfaces(tgen, dut):
 
     total_groups_before_clear = igmp_json["totalGroups"]
 
-    for key, value in igmp_json.items():
+    for _, value in igmp_json.items():
         if type(value) is not dict:
             continue
 
@@ -2381,7 +2381,7 @@ def clear_igmp_interfaces(tgen, dut):
     result = run_frr_cmd(rnode, "clear ip igmp interfaces")
 
     # Waiting for maximum 60 sec
-    for retry in range(1, 13):
+    for _ in range(1, 13):
         logger.info(
             "[DUT: %s]: Waiting for 5 sec for igmp interfaces" " to come up", dut
         )
@@ -2460,7 +2460,7 @@ def clear_mroute_verify(tgen, dut, expected=True):
 
     # RFC 3376: 8.2. Query Interval - Default: 125 seconds
     # So waiting for maximum 130 sec to get the igmp report
-    for retry in range(1, 26):
+    for _ in range(1, 26):
         logger.info("[DUT: %s]: Waiting for 2 sec for mroutes" " to come up", dut)
         sleep(5)
         keys_json1 = mroute_json_1.keys()
@@ -2671,7 +2671,7 @@ def add_rp_interfaces_and_pim_config(tgen, topo, interface, rp, rp_mapping):
     try:
         config_data = []
 
-        for group, rp_list in rp_mapping.items():
+        for _, rp_list in rp_mapping.items():
             for _rp in rp_list:
                 config_data.append("interface {}".format(interface))
                 config_data.append("ip address {}".format(_rp))
@@ -2720,7 +2720,7 @@ def scapy_send_bsr_raw_packet(tgen, topo, senderRouter, receiverRouter, packet=N
     script_path = os.path.join(CWD, "send_bsr_packet.py")
     node = tgen.net[senderRouter]
 
-    for destLink, data in topo["routers"][senderRouter]["links"].items():
+    for _, data in topo["routers"][senderRouter]["links"].items():
         if "type" in data and data["type"] == "loopback":
             continue
 
@@ -2795,12 +2795,12 @@ def find_rp_from_bsrp_info(tgen, dut, bsr, grp=None):
 
         # RP with lowest priority
         if len(priority_dict) != 1:
-            rp_p, lowest_priority = sorted(rp_priority.items(), key=lambda x: x[1])[0]
+            rp_p, _ = sorted(rp_priority.items(), key=lambda x: x[1])[0]
             rp_details[group] = rp_p
 
         # RP with highest hash value
         if len(priority_dict) == 1:
-            rp_h, highest_hash = sorted(rp_hash.items(), key=lambda x: x[1])[-1]
+            rp_h, _ = sorted(rp_hash.items(), key=lambda x: x[1])[-1]
             rp_details[group] = rp_h
 
         # RP with highest IP address
@@ -3239,7 +3239,7 @@ def verify_pim_join(
         interface_json = show_pim_join_json[interface]
 
         grp_addr = grp_addr.split("/")[0]
-        for source, data in interface_json[grp_addr].items():
+        for _, data in interface_json[grp_addr].items():
             # Verify pim join
             if pim_join:
                 if data["group"] == grp_addr and data["channelJoinName"] == "JOIN":

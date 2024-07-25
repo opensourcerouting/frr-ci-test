@@ -56,6 +56,7 @@ static int _nexthop_srv6_cmp(const struct nexthop *nh1,
 			     const struct nexthop *nh2)
 {
 	int ret = 0;
+	int i = 0;
 
 	if (!nh1->nh_srv6 && !nh2->nh_srv6)
 		return 0;
@@ -78,9 +79,26 @@ static int _nexthop_srv6_cmp(const struct nexthop *nh1,
 	if (ret != 0)
 		return ret;
 
-	ret = memcmp(&nh1->nh_srv6->seg6_segs,
-		     &nh2->nh_srv6->seg6_segs,
-		     sizeof(struct in6_addr));
+	if (!nh1->nh_srv6->seg6_segs && !nh2->nh_srv6->seg6_segs)
+		return 0;
+
+	if (!nh1->nh_srv6->seg6_segs && nh2->nh_srv6->seg6_segs)
+		return -1;
+
+	if (nh1->nh_srv6->seg6_segs && !nh2->nh_srv6->seg6_segs)
+		return 1;
+
+	if (nh1->nh_srv6->seg6_segs->num_segs !=
+	    nh2->nh_srv6->seg6_segs->num_segs)
+		return -1;
+
+	for (i = 0; i < nh1->nh_srv6->seg6_segs->num_segs; i++) {
+		ret = memcmp(&nh1->nh_srv6->seg6_segs->seg[i],
+			     &nh2->nh_srv6->seg6_segs->seg[i],
+			     sizeof(struct in6_addr));
+		if (ret != 0)
+			break;
+	}
 
 	return ret;
 }
@@ -155,7 +173,7 @@ static int _nexthop_cmp_no_labels(const struct nexthop *next1,
 		ret = _nexthop_gateway_cmp(next1, next2);
 		if (ret != 0)
 			return ret;
-		/* Intentional Fall-Through */
+		fallthrough;
 	case NEXTHOP_TYPE_IFINDEX:
 		if (next1->ifindex < next2->ifindex)
 			return -1;
@@ -277,7 +295,7 @@ int nexthop_cmp_basic(const struct nexthop *nh1,
 		ret = nexthop_g_addr_cmp(nh1->type, &nh1->gate, &nh2->gate);
 		if (ret != 0)
 			return ret;
-		/* Intentional Fall-Through */
+		fallthrough;
 	case NEXTHOP_TYPE_IFINDEX:
 		if (nh1->ifindex < nh2->ifindex)
 			return -1;
@@ -362,7 +380,7 @@ struct nexthop *nexthop_new(void)
 	 * The linux kernel does some weird stuff with adding +1 to
 	 * all nexthop weights it gets over netlink.
 	 * To handle this, just default everything to 1 right from
-	 * from the beginning so we don't have to special case
+	 * the beginning so we don't have to special case
 	 * default weights in the linux netlink code.
 	 *
 	 * 1 should be a valid on all platforms anyway.
@@ -568,15 +586,25 @@ void nexthop_del_srv6_seg6local(struct nexthop *nexthop)
 	if (!nexthop->nh_srv6)
 		return;
 
+	if (nexthop->nh_srv6->seg6local_action == ZEBRA_SEG6_LOCAL_ACTION_UNSPEC)
+		return;
+
 	nexthop->nh_srv6->seg6local_action = ZEBRA_SEG6_LOCAL_ACTION_UNSPEC;
 
-	if (sid_zero(&nexthop->nh_srv6->seg6_segs))
+	if (nexthop->nh_srv6->seg6_segs &&
+	    (nexthop->nh_srv6->seg6_segs->num_segs == 0 ||
+	     sid_zero(nexthop->nh_srv6->seg6_segs)))
+		XFREE(MTYPE_NH_SRV6, nexthop->nh_srv6->seg6_segs);
+
+	if (nexthop->nh_srv6->seg6_segs == NULL)
 		XFREE(MTYPE_NH_SRV6, nexthop->nh_srv6);
 }
 
-void nexthop_add_srv6_seg6(struct nexthop *nexthop,
-			   const struct in6_addr *segs)
+void nexthop_add_srv6_seg6(struct nexthop *nexthop, const struct in6_addr *segs,
+			   int num_segs)
 {
+	int i;
+
 	if (!segs)
 		return;
 
@@ -584,7 +612,22 @@ void nexthop_add_srv6_seg6(struct nexthop *nexthop,
 		nexthop->nh_srv6 = XCALLOC(MTYPE_NH_SRV6,
 					   sizeof(struct nexthop_srv6));
 
-	nexthop->nh_srv6->seg6_segs = *segs;
+	/* Enforce limit on srv6 seg stack size */
+	if (num_segs > SRV6_MAX_SIDS)
+		num_segs = SRV6_MAX_SIDS;
+
+	if (!nexthop->nh_srv6->seg6_segs) {
+		nexthop->nh_srv6->seg6_segs =
+			XCALLOC(MTYPE_NH_SRV6,
+				sizeof(struct seg6_seg_stack) +
+					num_segs * sizeof(struct in6_addr));
+	}
+
+	nexthop->nh_srv6->seg6_segs->num_segs = num_segs;
+
+	for (i = 0; i < num_segs; i++)
+		memcpy(&nexthop->nh_srv6->seg6_segs->seg[i], &segs[i],
+		       sizeof(struct in6_addr));
 }
 
 void nexthop_del_srv6_seg6(struct nexthop *nexthop)
@@ -592,12 +635,14 @@ void nexthop_del_srv6_seg6(struct nexthop *nexthop)
 	if (!nexthop->nh_srv6)
 		return;
 
-	memset(&nexthop->nh_srv6->seg6_segs, 0,
-	       sizeof(nexthop->nh_srv6->seg6_segs));
-
-	if (nexthop->nh_srv6->seg6local_action ==
-	    ZEBRA_SEG6_LOCAL_ACTION_UNSPEC)
-		XFREE(MTYPE_NH_SRV6, nexthop->nh_srv6);
+	if (nexthop->nh_srv6->seg6local_action == ZEBRA_SEG6_LOCAL_ACTION_UNSPEC &&
+			nexthop->nh_srv6->seg6_segs) {
+		memset(nexthop->nh_srv6->seg6_segs->seg, 0,
+		       sizeof(struct in6_addr) *
+			       nexthop->nh_srv6->seg6_segs->num_segs);
+		XFREE(MTYPE_NH_SRV6, nexthop->nh_srv6->seg6_segs);
+	}
+	XFREE(MTYPE_NH_SRV6, nexthop->nh_srv6);
 }
 
 const char *nexthop2str(const struct nexthop *nexthop, char *str, int size)
@@ -743,11 +788,32 @@ uint32_t nexthop_hash_quick(const struct nexthop *nexthop)
 	}
 
 	if (nexthop->nh_srv6) {
-		key = jhash_1word(nexthop->nh_srv6->seg6local_action, key);
-		key = jhash(&nexthop->nh_srv6->seg6local_ctx,
-			    sizeof(nexthop->nh_srv6->seg6local_ctx), key);
-		key = jhash(&nexthop->nh_srv6->seg6_segs,
-			    sizeof(nexthop->nh_srv6->seg6_segs), key);
+		int segs_num = 0;
+		int i = 0;
+
+		if (nexthop->nh_srv6->seg6local_action !=
+		    ZEBRA_SEG6_LOCAL_ACTION_UNSPEC) {
+			key = jhash_1word(nexthop->nh_srv6->seg6local_action,
+					  key);
+			key = jhash(&nexthop->nh_srv6->seg6local_ctx,
+				    sizeof(nexthop->nh_srv6->seg6local_ctx),
+				    key);
+			if (nexthop->nh_srv6->seg6_segs)
+				key = jhash(&nexthop->nh_srv6->seg6_segs->seg[0],
+					    sizeof(struct in6_addr), key);
+		} else {
+			if (nexthop->nh_srv6->seg6_segs) {
+				segs_num = nexthop->nh_srv6->seg6_segs->num_segs;
+				while (segs_num >= 1) {
+					key = jhash(&nexthop->nh_srv6->seg6_segs
+							    ->seg[i],
+						    sizeof(struct in6_addr),
+						    key);
+					segs_num -= 1;
+					i += 1;
+				}
+			}
+		}
 	}
 
 	return key;
@@ -797,6 +863,7 @@ void nexthop_copy_no_recurse(struct nexthop *copy,
 	memcpy(&copy->gate, &nexthop->gate, sizeof(nexthop->gate));
 	memcpy(&copy->src, &nexthop->src, sizeof(nexthop->src));
 	memcpy(&copy->rmap_src, &nexthop->rmap_src, sizeof(nexthop->rmap_src));
+	memcpy(&copy->rmac, &nexthop->rmac, sizeof(nexthop->rmac));
 	copy->rparent = rparent;
 	if (nexthop->nh_label)
 		nexthop_add_labels(copy, nexthop->nh_label_type,
@@ -809,9 +876,13 @@ void nexthop_copy_no_recurse(struct nexthop *copy,
 			nexthop_add_srv6_seg6local(copy,
 				nexthop->nh_srv6->seg6local_action,
 				&nexthop->nh_srv6->seg6local_ctx);
-		if (!sid_zero(&nexthop->nh_srv6->seg6_segs))
+		if (nexthop->nh_srv6->seg6_segs &&
+		    nexthop->nh_srv6->seg6_segs->num_segs &&
+		    !sid_zero(nexthop->nh_srv6->seg6_segs))
 			nexthop_add_srv6_seg6(copy,
-				&nexthop->nh_srv6->seg6_segs);
+					      &nexthop->nh_srv6->seg6_segs->seg[0],
+					      nexthop->nh_srv6->seg6_segs
+						      ->num_segs);
 	}
 }
 
@@ -932,6 +1003,8 @@ ssize_t printfrr_nhs(struct fbuf *buf, const struct nexthop *nexthop)
 		ret += bputs(buf, "blackhole");
 		break;
 	}
+
+	ret += bprintfrr(buf, " vrfid %u", nexthop->vrf_id);
 	return ret;
 }
 
@@ -1077,11 +1150,350 @@ static ssize_t printfrr_nh(struct fbuf *buf, struct printfrr_eargs *ea,
 	return -1;
 }
 
-bool nexthop_is_ifindex_type(const struct nexthop *nh)
+bool nexthop_is_blackhole(const struct nexthop *nh)
 {
-	if (nh->type == NEXTHOP_TYPE_IFINDEX ||
-	    nh->type == NEXTHOP_TYPE_IPV4_IFINDEX ||
-	    nh->type == NEXTHOP_TYPE_IPV6_IFINDEX)
-		return true;
-	return false;
+	return nh->type == NEXTHOP_TYPE_BLACKHOLE;
+}
+
+/*
+ * Render a nexthop into a json object; the caller allocates and owns
+ * the json object memory.
+ */
+void nexthop_json_helper(json_object *json_nexthop,
+			 const struct nexthop *nexthop, bool display_vrfid,
+			 uint8_t rn_family)
+{
+	json_object *json_labels = NULL;
+	json_object *json_backups = NULL;
+	json_object *json_seg6local = NULL;
+	json_object *json_seg6 = NULL;
+	json_object *json_segs = NULL;
+	int i;
+
+	json_object_int_add(json_nexthop, "flags", nexthop->flags);
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_DUPLICATE))
+		json_object_boolean_true_add(json_nexthop, "duplicate");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_FIB))
+		json_object_boolean_true_add(json_nexthop, "fib");
+
+	switch (nexthop->type) {
+	case NEXTHOP_TYPE_IPV4:
+	case NEXTHOP_TYPE_IPV4_IFINDEX:
+		json_object_string_addf(json_nexthop, "ip", "%pI4",
+					&nexthop->gate.ipv4);
+		json_object_string_add(json_nexthop, "afi", "ipv4");
+
+		if (nexthop->ifindex) {
+			json_object_int_add(json_nexthop, "interfaceIndex",
+					    nexthop->ifindex);
+			json_object_string_add(json_nexthop, "interfaceName",
+					       ifindex2ifname(nexthop->ifindex,
+							      nexthop->vrf_id));
+		}
+		break;
+	case NEXTHOP_TYPE_IPV6:
+	case NEXTHOP_TYPE_IPV6_IFINDEX:
+		json_object_string_addf(json_nexthop, "ip", "%pI6",
+					&nexthop->gate.ipv6);
+		json_object_string_add(json_nexthop, "afi", "ipv6");
+
+		if (nexthop->ifindex) {
+			json_object_int_add(json_nexthop, "interfaceIndex",
+					    nexthop->ifindex);
+			json_object_string_add(json_nexthop, "interfaceName",
+					       ifindex2ifname(nexthop->ifindex,
+							      nexthop->vrf_id));
+		}
+		break;
+
+	case NEXTHOP_TYPE_IFINDEX:
+		json_object_boolean_true_add(json_nexthop, "directlyConnected");
+		json_object_int_add(json_nexthop, "interfaceIndex",
+				    nexthop->ifindex);
+		json_object_string_add(json_nexthop, "interfaceName",
+				       ifindex2ifname(nexthop->ifindex,
+						      nexthop->vrf_id));
+		break;
+	case NEXTHOP_TYPE_BLACKHOLE:
+		json_object_boolean_true_add(json_nexthop, "unreachable");
+		switch (nexthop->bh_type) {
+		case BLACKHOLE_REJECT:
+			json_object_boolean_true_add(json_nexthop, "reject");
+			break;
+		case BLACKHOLE_ADMINPROHIB:
+			json_object_boolean_true_add(json_nexthop,
+						     "adminProhibited");
+			break;
+		case BLACKHOLE_NULL:
+			json_object_boolean_true_add(json_nexthop, "blackhole");
+			break;
+		case BLACKHOLE_UNSPEC:
+			break;
+		}
+		break;
+	}
+
+	/* This nexthop is a resolver for the parent nexthop.
+	 * Set resolver flag for better clarity and delimiter
+	 * in flat list of nexthops in json.
+	 */
+	if (nexthop->rparent)
+		json_object_boolean_true_add(json_nexthop, "resolver");
+
+	if (display_vrfid)
+		json_object_string_add(json_nexthop, "vrf",
+				       vrf_id_to_name(nexthop->vrf_id));
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_DUPLICATE))
+		json_object_boolean_true_add(json_nexthop, "duplicate");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE))
+		json_object_boolean_true_add(json_nexthop, "active");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ONLINK))
+		json_object_boolean_true_add(json_nexthop, "onLink");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_LINKDOWN))
+		json_object_boolean_true_add(json_nexthop, "linkDown");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
+		json_object_boolean_true_add(json_nexthop, "recursive");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_HAS_BACKUP)) {
+		json_backups = json_object_new_array();
+		for (i = 0; i < nexthop->backup_num; i++) {
+			json_object_array_add(json_backups,
+					      json_object_new_int(
+						      nexthop->backup_idx[i]));
+		}
+
+		json_object_object_add(json_nexthop, "backupIndex",
+				       json_backups);
+	}
+
+	switch (nexthop->type) {
+	case NEXTHOP_TYPE_IPV4:
+	case NEXTHOP_TYPE_IPV4_IFINDEX:
+		if (nexthop->rmap_src.ipv4.s_addr)
+			json_object_string_addf(json_nexthop, "rmapSource",
+						"%pI4", &nexthop->rmap_src.ipv4);
+		else if (nexthop->src.ipv4.s_addr)
+			json_object_string_addf(json_nexthop, "source", "%pI4",
+						&nexthop->src.ipv4);
+		break;
+	case NEXTHOP_TYPE_IPV6:
+	case NEXTHOP_TYPE_IPV6_IFINDEX:
+		/* Allow for 5549 ipv4 prefix with ipv6 nexthop */
+		if (rn_family == AF_INET && nexthop->rmap_src.ipv4.s_addr)
+			json_object_string_addf(json_nexthop, "rmapSource",
+						"%pI4", &nexthop->rmap_src.ipv4);
+		else if (!IPV6_ADDR_SAME(&nexthop->rmap_src.ipv6, &in6addr_any))
+			json_object_string_addf(json_nexthop, "rmapSource",
+						"%pI6", &nexthop->rmap_src.ipv6);
+		else if (!IPV6_ADDR_SAME(&nexthop->src.ipv6, &in6addr_any))
+			json_object_string_addf(json_nexthop, "source", "%pI6",
+						&nexthop->src.ipv6);
+		break;
+	case NEXTHOP_TYPE_IFINDEX:
+	case NEXTHOP_TYPE_BLACKHOLE:
+		break;
+	}
+
+	if (nexthop->nh_label && nexthop->nh_label->num_labels) {
+		json_labels = json_object_new_array();
+
+		for (int label_index = 0;
+		     label_index < nexthop->nh_label->num_labels; label_index++)
+			json_object_array_add(
+				json_labels,
+				json_object_new_int((
+					(nexthop->nh_label_type == ZEBRA_LSP_EVPN)
+						? label2vni(
+							  &nexthop->nh_label->label
+								   [label_index])
+						: nexthop->nh_label
+							  ->label[label_index])));
+
+		json_object_object_add(json_nexthop, "labels", json_labels);
+	}
+
+	if (nexthop->weight)
+		json_object_int_add(json_nexthop, "weight", nexthop->weight);
+
+	if (nexthop->srte_color)
+		json_object_int_add(json_nexthop, "srteColor",
+				    nexthop->srte_color);
+
+	if (nexthop->nh_srv6) {
+		json_seg6local = json_object_new_object();
+		json_object_string_add(json_seg6local, "action",
+				       seg6local_action2str(
+					       nexthop->nh_srv6
+						       ->seg6local_action));
+		json_object_object_add(json_nexthop, "seg6local",
+				       json_seg6local);
+		if (nexthop->nh_srv6->seg6_segs &&
+		    nexthop->nh_srv6->seg6_segs->num_segs == 1) {
+			json_seg6 = json_object_new_object();
+			json_object_string_addf(json_seg6, "segs", "%pI6",
+						&nexthop->nh_srv6->seg6_segs
+							 ->seg[0]);
+			json_object_object_add(json_nexthop, "seg6", json_seg6);
+		} else {
+			if (nexthop->nh_srv6->seg6_segs) {
+				json_segs = json_object_new_array();
+				for (int seg_idx = 0;
+				     seg_idx <
+				     nexthop->nh_srv6->seg6_segs->num_segs;
+				     seg_idx++)
+					json_object_array_add(
+						json_segs,
+						json_object_new_stringf(
+							"%pI6",
+							&nexthop->nh_srv6
+								 ->seg6_segs
+								 ->seg[seg_idx]));
+				json_object_object_add(json_nexthop, "seg6",
+						       json_segs);
+			}
+		}
+	}
+}
+
+/*
+ * Helper for nexthop output
+ */
+void nexthop_vty_helper(struct vty *vty, const struct nexthop *nexthop,
+			bool display_vrfid, uint8_t rn_family)
+{
+	char buf[MPLS_LABEL_STRLEN];
+	char seg_buf[SRV6_SEG_STRLEN];
+	struct seg6_segs segs;
+	uint8_t i;
+
+	switch (nexthop->type) {
+	case NEXTHOP_TYPE_IPV4:
+	case NEXTHOP_TYPE_IPV4_IFINDEX:
+		vty_out(vty, " via %pI4", &nexthop->gate.ipv4);
+		if (nexthop->ifindex)
+			vty_out(vty, ", %s",
+				ifindex2ifname(nexthop->ifindex,
+					       nexthop->vrf_id));
+		break;
+	case NEXTHOP_TYPE_IPV6:
+	case NEXTHOP_TYPE_IPV6_IFINDEX:
+		vty_out(vty, " via %s",
+			inet_ntop(AF_INET6, &nexthop->gate.ipv6, buf,
+				  sizeof(buf)));
+		if (nexthop->ifindex)
+			vty_out(vty, ", %s",
+				ifindex2ifname(nexthop->ifindex,
+					       nexthop->vrf_id));
+		break;
+
+	case NEXTHOP_TYPE_IFINDEX:
+		vty_out(vty, " is directly connected, %s",
+			ifindex2ifname(nexthop->ifindex, nexthop->vrf_id));
+		break;
+	case NEXTHOP_TYPE_BLACKHOLE:
+		vty_out(vty, " unreachable");
+		switch (nexthop->bh_type) {
+		case BLACKHOLE_REJECT:
+			vty_out(vty, " (ICMP unreachable)");
+			break;
+		case BLACKHOLE_ADMINPROHIB:
+			vty_out(vty, " (ICMP admin-prohibited)");
+			break;
+		case BLACKHOLE_NULL:
+			vty_out(vty, " (blackhole)");
+			break;
+		case BLACKHOLE_UNSPEC:
+			break;
+		}
+		break;
+	}
+
+	if (display_vrfid)
+		vty_out(vty, " (vrf %s)", vrf_id_to_name(nexthop->vrf_id));
+
+	if (!CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE))
+		vty_out(vty, " inactive");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ONLINK))
+		vty_out(vty, " onlink");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_LINKDOWN))
+		vty_out(vty, " linkdown");
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
+		vty_out(vty, " (recursive)");
+
+	switch (nexthop->type) {
+	case NEXTHOP_TYPE_IPV4:
+	case NEXTHOP_TYPE_IPV4_IFINDEX:
+		if (nexthop->rmap_src.ipv4.s_addr)
+			vty_out(vty, ", rmapsrc %pI4", &nexthop->rmap_src.ipv4);
+		else if (nexthop->src.ipv4.s_addr)
+			vty_out(vty, ", src %pI4", &nexthop->src.ipv4);
+		break;
+	case NEXTHOP_TYPE_IPV6:
+	case NEXTHOP_TYPE_IPV6_IFINDEX:
+		/* Allow for 5549 ipv4 prefix with ipv6 nexthop */
+		if (rn_family == AF_INET && nexthop->rmap_src.ipv4.s_addr)
+			vty_out(vty, ", rmapsrc %pI4", &nexthop->rmap_src.ipv4);
+		else if (!IPV6_ADDR_SAME(&nexthop->rmap_src.ipv6, &in6addr_any))
+			vty_out(vty, ", rmapsrc %pI6", &nexthop->rmap_src.ipv6);
+		else if (!IPV6_ADDR_SAME(&nexthop->src.ipv6, &in6addr_any))
+			vty_out(vty, ", src %pI6", &nexthop->src.ipv6);
+		break;
+	case NEXTHOP_TYPE_IFINDEX:
+	case NEXTHOP_TYPE_BLACKHOLE:
+		break;
+	}
+
+	/* SR-TE information */
+	if (nexthop->srte_color)
+		vty_out(vty, ", SR-TE color %u", nexthop->srte_color);
+
+	/* Label information */
+	if (nexthop->nh_label && nexthop->nh_label->num_labels) {
+		vty_out(vty, ", label %s",
+			mpls_label2str(nexthop->nh_label->num_labels,
+				       nexthop->nh_label->label, buf,
+				       sizeof(buf), nexthop->nh_label_type, 1));
+	}
+
+	if (nexthop->nh_srv6) {
+		seg6local_context2str(buf, sizeof(buf),
+				      &nexthop->nh_srv6->seg6local_ctx,
+				      nexthop->nh_srv6->seg6local_action);
+		if (nexthop->nh_srv6->seg6local_action !=
+		    ZEBRA_SEG6_LOCAL_ACTION_UNSPEC)
+			vty_out(vty, ", seg6local %s %s",
+				seg6local_action2str(
+					nexthop->nh_srv6->seg6local_action),
+				buf);
+		if (nexthop->nh_srv6->seg6_segs &&
+		    IPV6_ADDR_CMP(&nexthop->nh_srv6->seg6_segs->seg[0],
+				  &in6addr_any)) {
+			segs.num_segs = nexthop->nh_srv6->seg6_segs->num_segs;
+			for (i = 0; i < segs.num_segs; i++)
+				memcpy(&segs.segs[i],
+				       &nexthop->nh_srv6->seg6_segs->seg[i],
+				       sizeof(struct in6_addr));
+			snprintf_seg6_segs(seg_buf, SRV6_SEG_STRLEN, &segs);
+			vty_out(vty, ", seg6 %s", seg_buf);
+		}
+	}
+
+	if (nexthop->weight)
+		vty_out(vty, ", weight %u", nexthop->weight);
+
+	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_HAS_BACKUP)) {
+		vty_out(vty, ", backup %d", nexthop->backup_idx[0]);
+
+		for (i = 1; i < nexthop->backup_num; i++)
+			vty_out(vty, ",%d", nexthop->backup_idx[i]);
+	}
 }

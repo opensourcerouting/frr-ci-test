@@ -6,6 +6,7 @@
  */
 
 #include <zebra.h>
+#include <sys/ioctl.h>
 
 #include "lib/json.h"
 #include "command.h"
@@ -68,7 +69,7 @@ const char *pim_cli_get_vrf_name(struct vty *vty)
 		return NULL;
 	}
 
-	return yang_dnode_get_string(vrf_node, "./name");
+	return yang_dnode_get_string(vrf_node, "name");
 }
 
 int pim_process_join_prune_cmd(struct vty *vty, const char *jpi_str)
@@ -99,25 +100,13 @@ int pim_process_no_join_prune_cmd(struct vty *vty)
 
 int pim_process_spt_switchover_infinity_cmd(struct vty *vty)
 {
-	const char *vrfname;
 	char spt_plist_xpath[XPATH_MAXLEN];
 	char spt_action_xpath[XPATH_MAXLEN];
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
 	snprintf(spt_plist_xpath, sizeof(spt_plist_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(spt_plist_xpath, "/spt-switchover/spt-infinity-prefix-list",
-		sizeof(spt_plist_xpath));
-
+		 "%s/spt-switchover/spt-infinity-prefix-list", VTY_CURR_XPATH);
 	snprintf(spt_action_xpath, sizeof(spt_action_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(spt_action_xpath, "/spt-switchover/spt-action",
-		sizeof(spt_action_xpath));
+		 "%s/spt-switchover/spt-action", VTY_CURR_XPATH);
 
 	if (yang_dnode_exists(vty->candidate_config->dnode, spt_plist_xpath))
 		nb_cli_enqueue_change(vty, spt_plist_xpath, NB_OP_DESTROY,
@@ -131,55 +120,30 @@ int pim_process_spt_switchover_infinity_cmd(struct vty *vty)
 int pim_process_spt_switchover_prefixlist_cmd(struct vty *vty,
 					      const char *plist)
 {
-	const char *vrfname;
 	char spt_plist_xpath[XPATH_MAXLEN];
 	char spt_action_xpath[XPATH_MAXLEN];
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
 	snprintf(spt_plist_xpath, sizeof(spt_plist_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(spt_plist_xpath, "/spt-switchover/spt-infinity-prefix-list",
-		sizeof(spt_plist_xpath));
-
+		 "./spt-switchover/spt-infinity-prefix-list");
 	snprintf(spt_action_xpath, sizeof(spt_action_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(spt_action_xpath, "/spt-switchover/spt-action",
-		sizeof(spt_action_xpath));
+		 "./spt-switchover/spt-action");
 
 	nb_cli_enqueue_change(vty, spt_action_xpath, NB_OP_MODIFY,
 			      "PIM_SPT_INFINITY");
-	nb_cli_enqueue_change(vty, spt_plist_xpath, NB_OP_MODIFY,
-			      plist);
+	nb_cli_enqueue_change(vty, spt_plist_xpath, NB_OP_MODIFY, plist);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
 
 int pim_process_no_spt_switchover_cmd(struct vty *vty)
 {
-	const char *vrfname;
 	char spt_plist_xpath[XPATH_MAXLEN];
 	char spt_action_xpath[XPATH_MAXLEN];
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
 	snprintf(spt_plist_xpath, sizeof(spt_plist_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(spt_plist_xpath, "/spt-switchover/spt-infinity-prefix-list",
-		sizeof(spt_plist_xpath));
-
+		 "./spt-switchover/spt-infinity-prefix-list");
 	snprintf(spt_action_xpath, sizeof(spt_action_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(spt_action_xpath, "/spt-switchover/spt-action",
-		sizeof(spt_action_xpath));
+		 "./spt-switchover/spt-action");
 
 	nb_cli_enqueue_change(vty, spt_plist_xpath, NB_OP_DESTROY, NULL);
 	nb_cli_enqueue_change(vty, spt_action_xpath, NB_OP_MODIFY,
@@ -216,35 +180,20 @@ int pim_process_no_pim_packet_cmd(struct vty *vty)
 
 int pim_process_keepalivetimer_cmd(struct vty *vty, const char *kat)
 {
-	const char *vrfname;
 	char ka_timer_xpath[XPATH_MAXLEN];
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
+	snprintf(ka_timer_xpath, sizeof(ka_timer_xpath), "./keep-alive-timer");
 
-	snprintf(ka_timer_xpath, sizeof(ka_timer_xpath), FRR_PIM_VRF_XPATH,
-		 "frr-pim:pimd", "pim", vrfname, FRR_PIM_AF_XPATH_VAL);
-	strlcat(ka_timer_xpath, "/keep-alive-timer", sizeof(ka_timer_xpath));
-
-	nb_cli_enqueue_change(vty, ka_timer_xpath, NB_OP_MODIFY,
-			      kat);
+	nb_cli_enqueue_change(vty, ka_timer_xpath, NB_OP_MODIFY, kat);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
 
 int pim_process_no_keepalivetimer_cmd(struct vty *vty)
 {
-	const char *vrfname;
 	char ka_timer_xpath[XPATH_MAXLEN];
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
-	snprintf(ka_timer_xpath, sizeof(ka_timer_xpath), FRR_PIM_VRF_XPATH,
-		 "frr-pim:pimd", "pim", vrfname, FRR_PIM_AF_XPATH_VAL);
-	strlcat(ka_timer_xpath, "/keep-alive-timer", sizeof(ka_timer_xpath));
+	snprintf(ka_timer_xpath, sizeof(ka_timer_xpath), "./keep-alive-timer");
 
 	nb_cli_enqueue_change(vty, ka_timer_xpath, NB_OP_DESTROY, NULL);
 
@@ -253,58 +202,47 @@ int pim_process_no_keepalivetimer_cmd(struct vty *vty)
 
 int pim_process_rp_kat_cmd(struct vty *vty, const char *rpkat)
 {
-	const char *vrfname;
 	char rp_ka_timer_xpath[XPATH_MAXLEN];
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
 	snprintf(rp_ka_timer_xpath, sizeof(rp_ka_timer_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(rp_ka_timer_xpath, "/rp-keep-alive-timer",
-		sizeof(rp_ka_timer_xpath));
+		 "./rp-keep-alive-timer");
 
-	nb_cli_enqueue_change(vty, rp_ka_timer_xpath, NB_OP_MODIFY,
-			      rpkat);
+	nb_cli_enqueue_change(vty, rp_ka_timer_xpath, NB_OP_MODIFY, rpkat);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
 
 int pim_process_no_rp_kat_cmd(struct vty *vty)
 {
-	const char *vrfname;
 	char rp_ka_timer[6];
 	char rp_ka_timer_xpath[XPATH_MAXLEN];
 	uint v;
 	char rs_timer_xpath[XPATH_MAXLEN];
 
-	snprintf(rs_timer_xpath, sizeof(rs_timer_xpath),
-		 FRR_PIM_ROUTER_XPATH, FRR_PIM_AF_XPATH_VAL);
+	snprintf(rs_timer_xpath, sizeof(rs_timer_xpath), FRR_PIM_ROUTER_XPATH,
+		 FRR_PIM_AF_XPATH_VAL);
 	strlcat(rs_timer_xpath, "/register-suppress-time",
 		sizeof(rs_timer_xpath));
 
 	/* RFC4601 */
-	v = yang_dnode_get_uint16(vty->candidate_config->dnode, "%s",
-				  rs_timer_xpath);
+	/* Check if register suppress time is configured or assigned
+	 * the default register suppress time.
+	 */
+	if (yang_dnode_exists(vty->candidate_config->dnode, rs_timer_xpath))
+		v = yang_dnode_get_uint16(vty->candidate_config->dnode, "%s",
+					  rs_timer_xpath);
+	else
+		v = PIM_REGISTER_SUPPRESSION_TIME_DEFAULT;
+
 	v = 3 * v + PIM_REGISTER_PROBE_TIME_DEFAULT;
 	if (v > UINT16_MAX)
 		v = UINT16_MAX;
 	snprintf(rp_ka_timer, sizeof(rp_ka_timer), "%u", v);
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
 	snprintf(rp_ka_timer_xpath, sizeof(rp_ka_timer_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(rp_ka_timer_xpath, "/rp-keep-alive-timer",
-		sizeof(rp_ka_timer_xpath));
+		 "./rp-keep-alive-timer");
 
-	nb_cli_enqueue_change(vty, rp_ka_timer_xpath, NB_OP_MODIFY,
-			      rp_ka_timer);
+	nb_cli_enqueue_change(vty, rp_ka_timer_xpath, NB_OP_MODIFY, rp_ka_timer);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
@@ -523,8 +461,8 @@ int pim_process_no_ip_mroute_cmd(struct vty *vty, const char *interface,
 int pim_process_rp_cmd(struct vty *vty, const char *rp_str,
 		       const char *group_str)
 {
-	const char *vrfname;
-	char rp_group_xpath[XPATH_MAXLEN];
+	char group_xpath[XPATH_MAXLEN];
+	int printed;
 	int result = 0;
 	struct prefix group;
 	pim_addr rp_addr;
@@ -565,16 +503,17 @@ int pim_process_rp_cmd(struct vty *vty, const char *rp_str,
 	}
 #endif
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
+	printed = snprintf(group_xpath, sizeof(group_xpath),
+			   "./" FRR_PIM_STATIC_RP_XPATH "/group-list[.='%s']",
+			   rp_str, group_str);
+
+	if (printed >= (int)(sizeof(group_xpath))) {
+		vty_out(vty, "Xpath too long (%d > %u)", printed + 1,
+			XPATH_MAXLEN);
 		return CMD_WARNING_CONFIG_FAILED;
+	}
 
-	snprintf(rp_group_xpath, sizeof(rp_group_xpath),
-		 FRR_PIM_STATIC_RP_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL, rp_str);
-	strlcat(rp_group_xpath, "/group-list", sizeof(rp_group_xpath));
-
-	nb_cli_enqueue_change(vty, rp_group_xpath, NB_OP_CREATE, group_str);
+	nb_cli_enqueue_change(vty, group_xpath, NB_OP_CREATE, NULL);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
@@ -582,31 +521,15 @@ int pim_process_rp_cmd(struct vty *vty, const char *rp_str,
 int pim_process_no_rp_cmd(struct vty *vty, const char *rp_str,
 			  const char *group_str)
 {
-	char group_list_xpath[XPATH_MAXLEN];
 	char group_xpath[XPATH_MAXLEN];
 	char rp_xpath[XPATH_MAXLEN];
 	int printed;
-	const char *vrfname;
 	const struct lyd_node *group_dnode;
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
-	snprintf(rp_xpath, sizeof(rp_xpath), FRR_PIM_STATIC_RP_XPATH,
-		 "frr-pim:pimd", "pim", vrfname, FRR_PIM_AF_XPATH_VAL, rp_str);
-
-	printed = snprintf(group_list_xpath, sizeof(group_list_xpath),
-			   "%s/group-list", rp_xpath);
-
-	if (printed >= (int)(sizeof(group_list_xpath))) {
-		vty_out(vty, "Xpath too long (%d > %u)", printed + 1,
-			XPATH_MAXLEN);
-		return CMD_WARNING_CONFIG_FAILED;
-	}
-
-	printed = snprintf(group_xpath, sizeof(group_xpath), "%s[.='%s']",
-			   group_list_xpath, group_str);
+	snprintf(rp_xpath, sizeof(rp_xpath), "%s/" FRR_PIM_STATIC_RP_XPATH,
+		 VTY_CURR_XPATH, rp_str);
+	printed = snprintf(group_xpath, sizeof(group_xpath),
+			   "%s/group-list[.='%s']", rp_xpath, group_str);
 
 	if (printed >= (int)(sizeof(group_xpath))) {
 		vty_out(vty, "Xpath too long (%d > %u)", printed + 1,
@@ -623,8 +546,7 @@ int pim_process_no_rp_cmd(struct vty *vty, const char *rp_str,
 	if (yang_is_last_list_dnode(group_dnode))
 		nb_cli_enqueue_change(vty, rp_xpath, NB_OP_DESTROY, NULL);
 	else
-		nb_cli_enqueue_change(vty, group_list_xpath, NB_OP_DESTROY,
-				      group_str);
+		nb_cli_enqueue_change(vty, group_xpath, NB_OP_DESTROY, NULL);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
@@ -632,16 +554,10 @@ int pim_process_no_rp_cmd(struct vty *vty, const char *rp_str,
 int pim_process_rp_plist_cmd(struct vty *vty, const char *rp_str,
 			     const char *prefix_list)
 {
-	const char *vrfname;
 	char rp_plist_xpath[XPATH_MAXLEN];
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
 	snprintf(rp_plist_xpath, sizeof(rp_plist_xpath),
-		 FRR_PIM_STATIC_RP_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL, rp_str);
+		 "./" FRR_PIM_STATIC_RP_XPATH, rp_str);
 	strlcat(rp_plist_xpath, "/prefix-list", sizeof(rp_plist_xpath));
 
 	nb_cli_enqueue_change(vty, rp_plist_xpath, NB_OP_MODIFY, prefix_list);
@@ -654,19 +570,12 @@ int pim_process_no_rp_plist_cmd(struct vty *vty, const char *rp_str,
 {
 	char rp_xpath[XPATH_MAXLEN];
 	char plist_xpath[XPATH_MAXLEN];
-	const char *vrfname;
 	const struct lyd_node *plist_dnode;
 	const char *plist;
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
-		return CMD_WARNING_CONFIG_FAILED;
-
-	snprintf(rp_xpath, sizeof(rp_xpath), FRR_PIM_STATIC_RP_XPATH,
-		 "frr-pim:pimd", "pim", vrfname, FRR_PIM_AF_XPATH_VAL, rp_str);
-
-	snprintf(plist_xpath, sizeof(plist_xpath), FRR_PIM_STATIC_RP_XPATH,
-		 "frr-pim:pimd", "pim", vrfname, FRR_PIM_AF_XPATH_VAL, rp_str);
+	snprintf(rp_xpath, sizeof(rp_xpath), "%s/" FRR_PIM_STATIC_RP_XPATH,
+		 VTY_CURR_XPATH, rp_str);
+	snprintf(plist_xpath, sizeof(plist_xpath), "%s", rp_xpath);
 	strlcat(plist_xpath, "/prefix-list", sizeof(plist_xpath));
 
 	plist_dnode = yang_dnode_get(vty->candidate_config->dnode, plist_xpath);
@@ -675,7 +584,7 @@ int pim_process_no_rp_plist_cmd(struct vty *vty, const char *rp_str,
 		return NB_OK;
 	}
 
-	plist = yang_dnode_get_string(plist_dnode, "%s", plist_xpath);
+	plist = yang_dnode_get_string(plist_dnode, NULL);
 	if (strcmp(prefix_list, plist)) {
 		vty_out(vty, "%% Unable to find specified RP\n");
 		return NB_OK;
@@ -1059,8 +968,8 @@ void pim_show_state(struct pim_instance *pim, struct vty *vty,
 	frr_each (rb_pim_oil, &pim->channel_oil_head, c_oil) {
 		char src_str[PIM_ADDRSTRLEN];
 		char grp_str[PIM_ADDRSTRLEN];
-		char in_ifname[INTERFACE_NAMSIZ + 1];
-		char out_ifname[INTERFACE_NAMSIZ + 1];
+		char in_ifname[IFNAMSIZ + 1];
+		char out_ifname[IFNAMSIZ + 1];
 		int oif_vif_index;
 		struct interface *ifp_in;
 		bool isRpt;
@@ -1078,7 +987,7 @@ void pim_show_state(struct pim_instance *pim, struct vty *vty,
 			   oil_mcastgrp(c_oil));
 		snprintfrr(src_str, sizeof(src_str), "%pPAs",
 			   oil_origin(c_oil));
-		ifp_in = pim_if_find_by_vif_index(pim, *oil_parent(c_oil));
+		ifp_in = pim_if_find_by_vif_index(pim, *oil_incoming_vif(c_oil));
 
 		if (ifp_in)
 			strlcpy(in_ifname, ifp_in->name, sizeof(in_ifname));
@@ -1148,13 +1057,18 @@ void pim_show_state(struct pim_instance *pim, struct vty *vty,
 						    "wrongInterface",
 						    c_oil->cc.wrong_if);
 			}
-		}
+		} else
 #if PIM_IPV == 4
-		else
 			vty_out(vty, "%-6d %-15pPAs  %-15pPAs  %-3s  %-16s  ",
 				c_oil->installed, oil_origin(c_oil),
 				oil_mcastgrp(c_oil), isRpt ? "y" : "n",
 				in_ifname);
+#else
+			/* Add a new row for c_oil with no OIF */
+			ttable_add_row(tt, "%d|%pPAs|%pPAs|%s|%s|%c",
+				       c_oil->installed, oil_origin(c_oil),
+				       oil_mcastgrp(c_oil), isRpt ? "y" : "n",
+				       in_ifname, ' ');
 #endif
 
 		for (oif_vif_index = 0; oif_vif_index < MAXVIFS;
@@ -1225,6 +1139,13 @@ void pim_show_state(struct pim_instance *pim, struct vty *vty,
 #if PIM_IPV == 4
 					vty_out(vty, "%s%s", out_ifname, flag);
 #else
+					/* OIF found.
+					 * Delete the existing row for c_oil,
+					 * with no OIF.
+					 * Add a new row for c_oil with OIF and
+					 * flag.
+					 */
+					ttable_del_row(tt, tt->nrows - 1);
 					ttable_add_row(
 						tt, "%d|%pPAs|%pPAs|%s|%s|%s%s",
 						c_oil->installed,
@@ -2832,6 +2753,8 @@ static int pim_print_json_pnc_cache_walkcb(struct hash_bucket *backet,
 	json_object *json_row = NULL;
 	json_object *json_ifp = NULL;
 	json_object *json_arr = NULL;
+	struct pim_interface *pim_ifp = NULL;
+	bool pim_enable = false;
 
 	for (nh_node = pnc->nexthop; nh_node; nh_node = nh_node->next) {
 		first_ifindex = nh_node->ifindex;
@@ -2851,6 +2774,14 @@ static int pim_print_json_pnc_cache_walkcb(struct hash_bucket *backet,
 		json_ifp = json_object_new_object();
 		json_object_string_add(json_ifp, "interface",
 				       ifp ? ifp->name : "NULL");
+
+		if (ifp)
+			pim_ifp = ifp->info;
+
+		if (pim_ifp && pim_ifp->pim_enable)
+			pim_enable = true;
+
+		json_object_boolean_add(json_ifp, "pimEnabled", pim_enable);
 #if PIM_IPV == 4
 		json_object_string_addf(json_ifp, "nexthop", "%pI4",
 					&nh_node->gate.ipv4);
@@ -2871,7 +2802,6 @@ int pim_show_nexthop_lookup_cmd_helper(const char *vrf, struct vty *vty,
 	struct prefix grp;
 	struct pim_nexthop nexthop;
 	struct vrf *v;
-	char grp_str[PREFIX_STRLEN];
 
 	v = vrf_lookup_by_name(vrf ? vrf : VRF_DEFAULT_NAME);
 
@@ -2907,9 +2837,7 @@ int pim_show_nexthop_lookup_cmd_helper(const char *vrf, struct vty *vty,
 		return CMD_SUCCESS;
 	}
 
-	pim_addr_dump("<grp?>", &grp, grp_str, sizeof(grp_str));
-
-	vty_out(vty, "Group %s --- Nexthop %pPAs Interface %s\n", grp_str,
+	vty_out(vty, "Group %pFXh --- Nexthop %pPAs Interface %s\n", &grp,
 		&nexthop.mrib_nexthop_addr, nexthop.interface->name);
 
 	return CMD_SUCCESS;
@@ -3385,20 +3313,18 @@ int gm_process_no_last_member_query_interval_cmd(struct vty *vty)
 int pim_process_ssmpingd_cmd(struct vty *vty, enum nb_operation operation,
 			     const char *src_str)
 {
-	const char *vrfname;
-	char ssmpingd_ip_xpath[XPATH_MAXLEN];
+	char ssmpingd_src_ip_xpath[XPATH_MAXLEN];
+	int printed;
 
-	vrfname = pim_cli_get_vrf_name(vty);
-	if (vrfname == NULL)
+	printed = snprintf(ssmpingd_src_ip_xpath, sizeof(ssmpingd_src_ip_xpath),
+			   "./ssm-pingd-source-ip[.='%s']", src_str);
+	if (printed >= (int)sizeof(ssmpingd_src_ip_xpath)) {
+		vty_out(vty, "Xpath too long (%d > %u)", printed + 1,
+			XPATH_MAXLEN);
 		return CMD_WARNING_CONFIG_FAILED;
+	}
 
-	snprintf(ssmpingd_ip_xpath, sizeof(ssmpingd_ip_xpath),
-		 FRR_PIM_VRF_XPATH, "frr-pim:pimd", "pim", vrfname,
-		 FRR_PIM_AF_XPATH_VAL);
-	strlcat(ssmpingd_ip_xpath, "/ssm-pingd-source-ip",
-		sizeof(ssmpingd_ip_xpath));
-
-	nb_cli_enqueue_change(vty, ssmpingd_ip_xpath, operation, src_str);
+	nb_cli_enqueue_change(vty, ssmpingd_src_ip_xpath, operation, NULL);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
@@ -3643,8 +3569,8 @@ void show_mroute(struct pim_instance *pim, struct vty *vty, pim_sgaddr *sg,
 	int first;
 	char grp_str[PIM_ADDRSTRLEN];
 	char src_str[PIM_ADDRSTRLEN];
-	char in_ifname[INTERFACE_NAMSIZ + 1];
-	char out_ifname[INTERFACE_NAMSIZ + 1];
+	char in_ifname[IFNAMSIZ + 1];
+	char out_ifname[IFNAMSIZ + 1];
 	int oif_vif_index;
 	struct interface *ifp_in;
 	char proto[100];
@@ -3704,7 +3630,7 @@ void show_mroute(struct pim_instance *pim, struct vty *vty, pim_sgaddr *sg,
 		if (pim_channel_oil_empty(c_oil))
 			strlcat(state_str, "P", sizeof(state_str));
 
-		ifp_in = pim_if_find_by_vif_index(pim, *oil_parent(c_oil));
+		ifp_in = pim_if_find_by_vif_index(pim, *oil_incoming_vif(c_oil));
 
 		if (ifp_in)
 			strlcpy(in_ifname, ifp_in->name, sizeof(in_ifname));
@@ -3770,7 +3696,7 @@ void show_mroute(struct pim_instance *pim, struct vty *vty, pim_sgaddr *sg,
 			if (c_oil->oif_flags[oif_vif_index] & PIM_OIF_FLAG_MUTE)
 				continue;
 
-			if (*oil_parent(c_oil) == oif_vif_index &&
+			if (*oil_incoming_vif(c_oil) == oif_vif_index &&
 			    !pim_mroute_allow_iif_in_oil(c_oil, oif_vif_index))
 				continue;
 
@@ -3821,7 +3747,7 @@ void show_mroute(struct pim_instance *pim, struct vty *vty, pim_sgaddr *sg,
 						       "inboundInterface",
 						       in_ifname);
 				json_object_int_add(json_ifp_out, "iVifI",
-						    *oil_parent(c_oil));
+						    *oil_incoming_vif(c_oil));
 				json_object_string_add(json_ifp_out,
 						       "outboundInterface",
 						       out_ifname);
@@ -3970,9 +3896,9 @@ void show_mroute(struct pim_instance *pim, struct vty *vty, pim_sgaddr *sg,
 				json_object_string_add(json_ifp_out,
 						       "inboundInterface",
 						       in_ifname);
-				json_object_int_add(
-					json_ifp_out, "iVifI",
-					*oil_parent(&s_route->c_oil));
+				json_object_int_add(json_ifp_out, "iVifI",
+						    *oil_incoming_vif(
+							    &s_route->c_oil));
 				json_object_string_add(json_ifp_out,
 						       "outboundInterface",
 						       out_ifname);
@@ -5673,4 +5599,35 @@ int pim_show_bsm_db_helper(const char *vrf, struct vty *vty, bool uj)
 	pim_show_bsm_db(v->info, vty, uj);
 
 	return CMD_SUCCESS;
+}
+
+int pim_router_config_write(struct vty *vty)
+{
+	struct vrf *vrf;
+	struct pim_instance *pim;
+	int writes = 0;
+	char framestr[64] = { 0 };
+
+	RB_FOREACH (vrf, vrf_name_head, &vrfs_by_name) {
+		pim = vrf->info;
+
+		if (!pim)
+			continue;
+
+		snprintfrr(framestr, sizeof(framestr), "router %s",
+			   PIM_AF_ROUTER);
+		if (vrf->vrf_id != VRF_DEFAULT) {
+			strlcat(framestr, " vrf ", sizeof(framestr));
+			strlcat(framestr, vrf->name, sizeof(framestr));
+		}
+		vty_frame(vty, "%s\n", framestr);
+		++writes;
+
+		writes += pim_global_config_write_worker(pim, vty);
+
+		vty_endframe(vty, "exit\n");
+		++writes;
+	}
+
+	return writes;
 }

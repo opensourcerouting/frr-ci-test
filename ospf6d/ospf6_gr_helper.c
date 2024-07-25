@@ -134,7 +134,7 @@ static int ospf6_extract_grace_lsa_fields(struct ospf6_lsa *lsa,
 	uint16_t length = 0;
 	int sum = 0;
 
-	lsah = (struct ospf6_lsa_header *)lsa->header;
+	lsah = lsa->header;
 	if (ntohs(lsah->length) <= OSPF6_LSA_HEADER_SIZE) {
 		if (IS_DEBUG_OSPF6_GR)
 			zlog_debug("%s: undersized (%u B) lsa", __func__,
@@ -176,6 +176,7 @@ static int ospf6_extract_grace_lsa_fields(struct ospf6_lsa *lsa,
 				return OSPF6_FAILURE;
 			break;
 		default:
+			sum += TLV_SIZE(tlvh);
 			if (IS_DEBUG_OSPF6_GR)
 				zlog_debug("%s, Ignoring unknown TLV type:%d",
 					   __func__, ntohs(tlvh->type));
@@ -228,9 +229,9 @@ static bool ospf6_check_chg_in_rxmt_list(struct ospf6_neighbor *nbr)
 					  lsa->header->adv_router, lsa->lsdb);
 
 		if (lsa_in_db && lsa_in_db->tobe_acknowledged) {
-			ospf6_lsa_unlock(lsa);
+			ospf6_lsa_unlock(&lsa);
 			if (lsanext)
-				ospf6_lsa_unlock(lsanext);
+				ospf6_lsa_unlock(&lsanext);
 
 			return OSPF6_TRUE;
 		}
@@ -938,15 +939,6 @@ static void show_ospf6_gr_helper_details(struct vty *vty, struct ospf6 *ospf6,
 				? "Enabled"
 				: "Disabled");
 
-#if CONFDATE > 20240401
-		CPP_NOTICE("Remove deprecated json key: restartSupoort")
-#endif
-		json_object_string_add(
-			json, "restartSupoort",
-			(ospf6->ospf6_helper_cfg.only_planned_restart)
-				? "Planned Restart only"
-				: "Planned and Unplanned Restarts");
-
 		json_object_string_add(
 			json, "restartSupport",
 			(ospf6->ospf6_helper_cfg.only_planned_restart)
@@ -1231,7 +1223,7 @@ static int ospf6_grace_lsa_show_info(struct vty *vty, struct ospf6_lsa *lsa,
 	uint16_t length = 0;
 	int sum = 0;
 
-	lsah = (struct ospf6_lsa_header *)lsa->header;
+	lsah = lsa->header;
 	if (ntohs(lsah->length) <= OSPF6_LSA_HEADER_SIZE) {
 		if (IS_DEBUG_OSPF6_GR)
 			zlog_debug("%s: undersized (%u B) lsa", __func__,

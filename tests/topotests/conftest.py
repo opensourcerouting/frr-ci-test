@@ -4,6 +4,7 @@ Topotest conftest.py file.
 """
 # pylint: disable=consider-using-f-string
 
+import contextlib
 import glob
 import logging
 import os
@@ -12,9 +13,11 @@ import resource
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import lib.fixtures
 import pytest
+from lib.common_config import generate_support_bundle
 from lib.micronet_compat import Mininet
 from lib.topogen import diagnose_env, get_topogen
 from lib.topolog import get_test_logdir, logger
@@ -41,6 +44,34 @@ except (AttributeError, ImportError):
     pass
 
 
+# Remove this and use munet version when we move to pytest_asyncio
+@contextlib.contextmanager
+def chdir(ndir, desc=""):
+    odir = os.getcwd()
+    os.chdir(ndir)
+    if desc:
+        logging.debug("%s: chdir from %s to %s", desc, odir, ndir)
+    try:
+        yield
+    finally:
+        if desc:
+            logging.debug("%s: chdir back from %s to %s", desc, ndir, odir)
+        os.chdir(odir)
+
+
+@contextlib.contextmanager
+def log_handler(basename, logpath):
+    topolog.logstart(basename, logpath)
+    try:
+        yield
+    finally:
+        topolog.logfinish(basename, logpath)
+
+
+def is_main_runner():
+    return "PYTEST_XDIST_WORKER" not in os.environ
+
+
 def pytest_addoption(parser):
     """
     Add topology-only option to the topology tester. This option makes pytest
@@ -59,6 +90,17 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--cov-topotest",
+        action="store_true",
+        help="Enable reporting of coverage",
+    )
+
+    parser.addoption(
+        "--cov-frr-build-dir",
+        help="Dir of coverage-enable build being run, default is the source dir",
+    )
+
+    parser.addoption(
         "--gdb-breakpoints",
         metavar="SYMBOL[,SYMBOL...]",
         help="Comma-separated list of functions to set gdb breakpoints on",
@@ -74,6 +116,12 @@ def pytest_addoption(parser):
         "--gdb-routers",
         metavar="ROUTER[,ROUTER...]",
         help="Comma-separated list of routers to spawn gdb on, or 'all'",
+    )
+
+    parser.addoption(
+        "--gdb-use-emacs",
+        action="store_true",
+        help="Use emacsclient to run gdb instead of a shell",
     )
 
     parser.addoption(
@@ -141,6 +189,24 @@ def pytest_addoption(parser):
         help="Options to pass to `perf record`.",
     )
 
+    parser.addoption(
+        "--rr-daemons",
+        metavar="DAEMON[,DAEMON...]",
+        help="Comma-separated list of daemons to run `rr` on, or 'all'",
+    )
+
+    parser.addoption(
+        "--rr-routers",
+        metavar="ROUTER[,ROUTER...]",
+        help="Comma-separated list of routers to run `rr` on, or 'all'",
+    )
+
+    parser.addoption(
+        "--rr-options",
+        metavar="OPTS",
+        help="Options to pass to `rr record`.",
+    )
+
     rundir_help = "directory for running in and log files"
     parser.addini("rundir", rundir_help, default="/tmp/topotests")
     parser.addoption("--rundir", metavar="DIR", help=rundir_help)
@@ -174,6 +240,12 @@ def pytest_addoption(parser):
         "--valgrind-extra",
         action="store_true",
         help="Generate suppression file, and enable more precise (slower) valgrind checks",
+    )
+
+    parser.addoption(
+        "--valgrind-leak-kinds",
+        metavar="KIND[,KIND...]",
+        help="Comma-separated list of valgrind leak kinds or 'all'",
     )
 
     parser.addoption(
@@ -271,6 +343,70 @@ def check_for_memleaks():
         pytest.fail("memleaks found for daemons: " + " ".join(daemons))
 
 
+def check_for_core_dumps():
+    tgen = get_topogen()  # pylint: disable=redefined-outer-name
+    if not tgen:
+        return
+
+    if not hasattr(tgen, "existing_core_files"):
+        tgen.existing_core_files = set()
+    existing = tgen.existing_core_files
+
+    cores = glob.glob(os.path.join(tgen.logdir, "*/*.dmp"))
+    latest = {x for x in cores if x not in existing}
+    if latest:
+        existing |= latest
+        tgen.existing_core_files = existing
+
+        emsg = "New core[s] found: " + ", ".join(latest)
+        logger.error(emsg)
+        pytest.fail(emsg)
+
+
+def check_for_backtraces():
+    tgen = get_topogen()  # pylint: disable=redefined-outer-name
+    if not tgen:
+        return
+
+    if not hasattr(tgen, "existing_backtrace_files"):
+        tgen.existing_backtrace_files = {}
+    existing = tgen.existing_backtrace_files
+
+    latest = glob.glob(os.path.join(tgen.logdir, "*/*.log"))
+    backtraces = []
+    for vfile in latest:
+        with open(vfile, encoding="ascii") as vf:
+            vfcontent = vf.read()
+            btcount = vfcontent.count("Backtrace:")
+        if not btcount:
+            continue
+        if vfile not in existing:
+            existing[vfile] = 0
+        if btcount == existing[vfile]:
+            continue
+        existing[vfile] = btcount
+        backtraces.append(vfile)
+
+    if backtraces:
+        emsg = "New backtraces found in: " + ", ".join(backtraces)
+        logger.error(emsg)
+        pytest.fail(emsg)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def module_autouse(request):
+    basename = get_test_logdir(request.node.nodeid, True)
+    logdir = Path(topotest.g_pytest_config.option.rundir) / basename
+    logpath = logdir / "exec.log"
+
+    subprocess.check_call("mkdir -p -m 1777 {}".format(logdir), shell=True)
+
+    with log_handler(basename, logpath):
+        sdir = os.path.dirname(os.path.realpath(request.fspath))
+        with chdir(sdir, "module autouse fixture"):
+            yield
+
+
 @pytest.fixture(autouse=True, scope="module")
 def module_check_memtest(request):
     yield
@@ -282,14 +418,19 @@ def module_check_memtest(request):
             check_for_memleaks()
 
 
-def pytest_runtest_logstart(nodeid, location):
-    # location is (filename, lineno, testname)
-    topolog.logstart(nodeid, location, topotest.g_pytest_config.option.rundir)
-
-
-def pytest_runtest_logfinish(nodeid, location):
-    # location is (filename, lineno, testname)
-    topolog.logfinish(nodeid, location)
+#
+# Disable per test function logging as FRR CI system can't handle it.
+#
+# @pytest.fixture(autouse=True, scope="function")
+# def function_autouse(request):
+#     # For tests we actually use the logdir name as the logfile base
+#     logbase = get_test_logdir(nodeid=request.node.nodeid, module=False)
+#     logbase = os.path.join(topotest.g_pytest_config.option.rundir, logbase)
+#     logpath = Path(logbase)
+#     path = Path(f"{logpath.parent}/exec-{logpath.name}.log")
+#     subprocess.check_call("mkdir -p -m 1777 {}".format(logpath.parent), shell=True)
+#     with log_handler(request.node.nodeid, path):
+#         yield
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -304,9 +445,13 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     # Let the default pytest_runtest_call execute the test function
     yield
 
+    check_for_backtraces()
+    check_for_core_dumps()
+
     # Check for leaks if requested
     if item.config.option.valgrind_memleaks:
         check_for_valgrind_memleaks()
+
     if item.config.option.memleaks:
         check_for_memleaks()
 
@@ -326,6 +471,37 @@ def pytest_assertrepr_compare(op, left, right):
     return json_result.gen_report()
 
 
+def setup_coverage(config):
+    commander = Commander("pytest")
+    if config.option.cov_frr_build_dir:
+        bdir = Path(config.option.cov_frr_build_dir).resolve()
+        output = commander.cmd_raises(f"find {bdir} -name zebra_nb.gcno").strip()
+    else:
+        # Support build sub-directory of main source dir
+        bdir = Path(__file__).resolve().parent.parent.parent
+        output = commander.cmd_raises(f"find {bdir} -name zebra_nb.gcno").strip()
+    m = re.match(f"({bdir}.*)/zebra/zebra_nb.gcno", output)
+    if not m:
+        logger.warning(
+            "No coverage data files (*.gcno) found, try specifying --cov-frr-build-dir"
+        )
+        return
+
+    bdir = Path(m.group(1))
+    # Save so we can get later from g_pytest_config
+    rundir = Path(config.option.rundir).resolve()
+    gcdadir = rundir / "gcda"
+    os.environ["FRR_BUILD_DIR"] = str(bdir)
+    os.environ["GCOV_PREFIX_STRIP"] = str(len(bdir.parts) - 1)
+    os.environ["GCOV_PREFIX"] = str(gcdadir)
+
+    if is_main_runner():
+        commander.cmd_raises(f"find {bdir} -name '*.gc??' -exec chmod o+r {{}} +")
+        commander.cmd_raises(f"mkdir -p {gcdadir}")
+        commander.cmd_raises(f"chown -R root:frr {gcdadir}")
+        commander.cmd_raises(f"chmod 2775 {gcdadir}")
+
+
 def pytest_configure(config):
     """
     Assert that the environment is correctly configured, and get extra config.
@@ -340,8 +516,10 @@ def pytest_configure(config):
         os.environ["PYTEST_TOPOTEST_WORKER"] = ""
         is_xdist = os.environ["PYTEST_XDIST_MODE"] != "no"
         is_worker = False
+        wname = ""
     else:
-        os.environ["PYTEST_TOPOTEST_WORKER"] = os.environ["PYTEST_XDIST_WORKER"]
+        wname = os.environ["PYTEST_XDIST_WORKER"]
+        os.environ["PYTEST_TOPOTEST_WORKER"] = wname
         is_xdist = True
         is_worker = True
 
@@ -374,6 +552,16 @@ def pytest_configure(config):
     # Set the log_file (exec) to inside the rundir if not specified
     if not config.getoption("--log-file") and not config.getini("log_file"):
         config.option.log_file = os.path.join(rundir, "exec.log")
+
+    # Handle pytest-xdist each worker get's it's own top level log file
+    # `exec-worker-N.log`
+    if wname:
+        wname = wname.replace("gw", "worker-")
+        cpath = Path(config.option.log_file).absolute()
+        config.option.log_file = f"{cpath.parent}/{cpath.stem}-{wname}{cpath.suffix}"
+    elif is_xdist:
+        cpath = Path(config.option.log_file).absolute()
+        config.option.log_file = f"{cpath.parent}/{cpath.stem}-xdist{cpath.suffix}"
 
     # Turn on live logging if user specified verbose and the config has a CLI level set
     if config.getoption("--verbose") and not is_xdist and not config.getini("log_cli"):
@@ -414,8 +602,6 @@ def pytest_configure(config):
     if config.option.topology_only and is_xdist:
         pytest.exit("Cannot use --topology-only with distributed test mode")
 
-        pytest.exit("Cannot use --topology-only with distributed test mode")
-
     # Check environment now that we have config
     if not diagnose_env(rundir):
         pytest.exit("environment has errors, please read the logs in %s" % rundir)
@@ -430,29 +616,36 @@ def pytest_configure(config):
         if "TOPOTESTS_CHECK_STDERR" in os.environ:
             del os.environ["TOPOTESTS_CHECK_STDERR"]
 
+    if config.option.cov_topotest:
+        setup_coverage(config)
+
 
 @pytest.fixture(autouse=True, scope="session")
-def setup_session_auto():
-    if "PYTEST_TOPOTEST_WORKER" not in os.environ:
-        is_worker = False
-    elif not os.environ["PYTEST_TOPOTEST_WORKER"]:
-        is_worker = False
-    else:
-        is_worker = True
+def session_autouse():
+    # Aligns logs nicely
+    logging.addLevelName(logging.WARNING, " WARN")
+    logging.addLevelName(logging.INFO, " INFO")
 
-    logger.debug("Before the run (is_worker: %s)", is_worker)
-    if not is_worker:
+    is_main = is_main_runner()
+
+    logger.debug("Before the run (is_main: %s)", is_main)
+    if is_main:
         cleanup_previous()
     yield
-    if not is_worker:
+    if is_main:
         cleanup_current()
-    logger.debug("After the run (is_worker: %s)", is_worker)
+    logger.debug("After the run (is_main: %s)", is_main)
 
 
 def pytest_runtest_setup(item):
     module = item.parent.module
     script_dir = os.path.abspath(os.path.dirname(module.__file__))
     os.environ["PYTEST_TOPOTEST_SCRIPTDIR"] = script_dir
+    os.environ["CONFIGDIR"] = script_dir
+
+
+def pytest_exception_interact(node, call, report):
+    generate_support_bundle()
 
 
 def pytest_runtest_makereport(item, call):
@@ -566,6 +759,49 @@ def pytest_runtest_makereport(item, call):
 
     if pause and isatty:
         pause_test()
+
+
+def coverage_finish(terminalreporter, config):
+    commander = Commander("pytest")
+    rundir = Path(config.option.rundir).resolve()
+    bdir = Path(os.environ["FRR_BUILD_DIR"])
+    gcdadir = Path(os.environ["GCOV_PREFIX"])
+
+    logger.info("Creating .gcno ssymlink from '%s' to '%s'", gcdadir, bdir)
+    commander.cmd_raises(
+        f"cd {gcdadir}; bdir={bdir}"
+        + """
+for f in $(find . -name '*.gcda'); do
+    f=${f#./};
+    f=${f%.gcda}.gcno;
+    ln -fs $bdir/$f $f;
+    touch -h -r $bdir/$f $f;
+    echo $f;
+done"""
+    )
+
+    # Get the results into a summary file
+    data_file = rundir / "coverage.info"
+    logger.info("Gathering coverage data into: %s", data_file)
+    commander.cmd_raises(
+        f"lcov --directory {gcdadir} --capture --output-file {data_file}"
+    )
+
+    # Get coverage info filtered to a specific set of files
+    report_file = rundir / "coverage.info"
+    logger.debug("Generating coverage summary from: %s\n%s", report_file)
+    output = commander.cmd_raises(f"lcov --summary {data_file}")
+    logger.info("\nCOVERAGE-SUMMARY-START\n%s\nCOVERAGE-SUMMARY-END", output)
+    terminalreporter.write(
+        f"\nCOVERAGE-SUMMARY-START\n{output}\nCOVERAGE-SUMMARY-END\n"
+    )
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    # Only run if we are the top level test runner
+    is_xdist_worker = "PYTEST_XDIST_WORKER" in os.environ
+    if config.option.cov_topotest and not is_xdist_worker:
+        coverage_finish(terminalreporter, config)
 
 
 #

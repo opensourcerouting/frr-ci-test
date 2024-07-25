@@ -8,14 +8,15 @@ Topotests is a suite of topology tests for FRR built on top of micronet.
 Installation and Setup
 ----------------------
 
-Topotests run under python3. Additionally, for ExaBGP (which is used
-in some of the BGP tests) an older python2 version (and the python2
-version of ``pip``) must be installed.
+Topotests run under python3.
 
-Tested with Ubuntu 20.04,Ubuntu 18.04, and Debian 11.
+Tested with Ubuntu 22.04,Ubuntu 20.04, and Debian 12.
 
-Instructions are the same for all setups (i.e. ExaBGP is only used for
-BGP tests).
+Python protobuf version < 4 is required b/c python protobuf >= 4 requires a
+protoc >= 3.19, and older package versions are shipped by in the above distros.
+
+Instructions are the same for all setups. However, ExaBGP is only used for
+BGP tests.
 
 Tshark is only required if you enable any packet captures on test runs.
 
@@ -35,22 +36,25 @@ Installing Topotest Requirements
        tshark \
        valgrind
    python3 -m pip install wheel
-   python3 -m pip install 'pytest>=6.2.4'
-   python3 -m pip install 'pytest-xdist>=2.3.0'
+   python3 -m pip install 'pytest>=6.2.4' 'pytest-xdist>=2.3.0'
    python3 -m pip install 'scapy>=2.4.5'
    python3 -m pip install xmltodict
-   # Use python2 pip to install older ExaBGP
-   python2 -m pip install 'exabgp<4.0.0'
+   python3 -m pip install git+https://github.com/Exa-Networks/exabgp@0659057837cd6c6351579e9f0fa47e9fb7de7311
    useradd -d /var/run/exabgp/ -s /bin/false exabgp
 
-   # To enable the gRPC topotest install:
-   python3 -m pip install grpcio grpcio-tools
+The version of protobuf package that is installed on your system will determine
+which versions of the python protobuf packages you need to install.
 
-   # Install Socat tool to run PIMv6 tests,
-   # Socat code can be taken from below url,
-   # which has latest changes done for PIMv6,
-   # join and traffic:
-   https://github.com/opensourcerouting/socat/
+.. code:: shell
+
+   # - Either - For protobuf version <= 3.12
+   python3 -m pip install 'protobuf<4'
+
+   # - OR- for protobuf version >= 3.21
+   python3 -m pip install 'protobuf>=4'
+
+   # To enable the gRPC topotest also install:
+   python3 -m pip install grpcio grpcio-tools
 
 
 Enable Coredumps
@@ -122,9 +126,9 @@ If you prefer to manually build FRR, then use the following suggested config:
 
    ./configure \
        --prefix=/usr \
-       --localstatedir=/var/run/frr \
+       --sysconfdir=/etc \
+       --localstatedir=/var \
        --sbindir=/usr/lib/frr \
-       --sysconfdir=/etc/frr \
        --enable-vtysh \
        --enable-pimd \
        --enable-pim6d \
@@ -236,8 +240,8 @@ the number of the test we are interested in along with ``--errmsg`` option.
     ~/frr/tests/topotests# ./analyze.py -Ar run-save -T0 --errmsg
     bgp_multiview_topo1/test_bgp_multiview_topo1.py::test_bgp_converge: AssertionError: BGP did not converge:
 
-      IPv4 Unicast Summary (VIEW 1):
-      BGP router identifier 172.30.1.1, local AS number 100 vrf-id -1
+      IPv4 Unicast Summary:
+      BGP router identifier 172.30.1.1, local AS number 100 VIEW 1 vrf-id -1
       BGP table version 1
       RIB entries 1, using 184 bytes of memory
       Peers 3, using 2169 KiB of memory
@@ -272,8 +276,8 @@ select the first failed test case.
     >           assert False, "BGP did not converge:\n%s" % bgpStatus
     E           AssertionError: BGP did not converge:
     E
-    E             IPv4 Unicast Summary (VIEW 1):
-    E             BGP router identifier 172.30.1.1, local AS number 100 vrf-id -1
+    E             IPv4 Unicast Summary:
+    E             BGP router identifier 172.30.1.1, local AS number 100 VIEW 1 vrf-id -1
                   [...]
     E             Neighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt Desc
     E             172.16.1.1      4      65001         0         0        0    0    0    never      Connect        0 N/A
@@ -392,8 +396,9 @@ for ``master`` branch:
    ./bootstrap.sh
    ./configure \
        --enable-address-sanitizer \
-       --prefix=/usr/lib/frr --sysconfdir=/etc/frr \
-       --localstatedir=/var/run/frr \
+       --prefix=/usr/lib/frr \
+       --sysconfdir=/etc \
+       --localstatedir=/var \
        --sbindir=/usr/lib/frr --bindir=/usr/lib/frr \
        --with-moduledir=/usr/lib/frr/modules \
        --enable-multipath=0 --enable-rtadv \
@@ -449,7 +454,7 @@ as shown in the examples below.
 
 For each capture a window is opened displaying a live summary of the captured
 packets. Additionally, the entire packet stream is captured in a pcap file in
-the tests log directory e.g.,::
+the tests log directory e.g.,:
 
 .. code:: console
 
@@ -459,7 +464,7 @@ the tests log directory e.g.,::
    -rw------- 1 root root 45172 Apr 19 05:30 capture-r2-r2-eth0.pcap
    -rw------- 1 root root 48412 Apr 19 05:30 capture-sw1.pcap
    ...
--
+
 Viewing Live Daemon Logs
 """"""""""""""""""""""""
 
@@ -476,10 +481,10 @@ One can live view daemon or the frr logs in separate windows using the
 
 For each capture a window is opened displaying a live summary of the captured
 packets. Additionally, the entire packet stream is captured in a pcap file in
-the tests log directory e.g.,::
+the tests log directory e.g.,
 
-When using a unified log file `frr.log` one substitutes `frr` for the daemon
-name in the ``--logd`` CLI option, e.g.,
+When using a unified log file ``frr.log`` one substitutes ``frr`` for the
+daemon name in the ``--logd`` CLI option, e.g.,
 
 .. code:: shell
 
@@ -565,6 +570,8 @@ Here's an example of launching ``vtysh`` on routers ``rt1`` and ``rt2``.
 
    sudo -E pytest --vtysh=rt1,rt2 all-protocol-startup
 
+.. _debug_with_gdb:
+
 Debugging with GDB
 """"""""""""""""""
 
@@ -588,6 +595,12 @@ Here's an example of launching ``zebra`` and ``bgpd`` inside ``gdb`` on router
           --gdb-daemons=bgpd,zebra \
           --gdb-breakpoints=nb_config_diff \
           all-protocol-startup
+
+Finally, for Emacs users, you can specify ``--gdb-use-emacs``. When specified
+the first router and daemon to be launched in gdb will be launched and run with
+Emacs gdb functionality by using `emacsclient --eval` commands. This provides an
+IDE debugging experience for Emacs users. This functionality works best when
+using password-less sudo.
 
 Reporting Memleaks with FRR Memory Statistics
 """""""""""""""""""""""""""""""""""""""""""""
@@ -623,6 +636,8 @@ allocations upon exit. To enable also reporting of memory leaks to a specific
 location, define an environment variable ``TOPOTESTS_CHECK_MEMLEAK`` with the
 file prefix, i.e.:
 
+::
+
    export TOPOTESTS_CHECK_MEMLEAK="/home/mydir/memleak_"
 
 For tests that support the TOPOTESTS_CHECK_MEMLEAK environment variable, this
@@ -635,15 +650,25 @@ Detecting Memleaks with Valgrind
 """"""""""""""""""""""""""""""""
 
 Topotest can automatically launch all daemons with ``valgrind`` to check for
-memleaks. This is enabled by specifying 1 or 2 CLI arguments.
-``--valgrind-memleaks`` will enable general memleak detection, and
-``--valgrind-extra`` enables extra functionality including generating a
-suppression file. The suppression file ``tools/valgrind.supp`` is used when
-memleak detection is enabled.
+memleaks. This is enabled by specifying 1 to 3 CLI arguments.
+``--valgrind-memleaks`` enables memleak detection. ``--valgrind-extra`` enables
+extra functionality including generating a suppression file. The suppression
+file ``tools/valgrind.supp`` is used when memleak detection is enabled. Finally,
+``--valgrind-leak-kinds=KINDS`` can be used to modify what types of links are
+reported. This corresponds to valgrind's ``--show-link-kinds`` arg. The value is
+either ``all`` or a comma-separated list of types:
+``definite,indirect,possible,reachable``. The default is ``definite,possible``.
 
 .. code:: shell
 
    sudo -E pytest --valgrind-memleaks all-protocol-startup
+
+.. note:: GDB can be used in conjection with valgrind.
+
+   When you enable ``--valgrind-memleaks`` and you also launch various daemons
+   under GDB (debug_with_gdb_) topotest will connect the two utilities using
+   ``--vgdb-error=0`` and attaching to a ``vgdb`` process. This is very
+   useful for debugging bugs with use of uninitialized errors, et al.
 
 Collecting Performance Data using perf(1)
 """""""""""""""""""""""""""""""""""""""""
@@ -665,6 +690,66 @@ during the config_timing test.
 
 To specify different arguments for ``perf record``, one can use the
 ``--perf-options`` this will replace the ``-g`` used by default.
+
+Running Daemons under RR Debug (``rr record``)
+""""""""""""""""""""""""""""""""""""""""""""""
+
+Topotest can automatically launch any daemon under ``rr(1)`` to collect
+execution state. The daemon is run in the foreground with ``rr record``.
+
+The execution state will be saved in the router specific directory
+(in a `rr` subdir that rr creates) under the test's run directoy.
+
+Here's an example of collecting ``rr`` execution state from ``mgmtd`` on router
+``r1`` during the ``config_timing`` test.
+
+.. code:: console
+
+   $ sudo -E pytest --rr-routers=r1 --rr-daemons=mgmtd config_timing
+   ...
+   $ find /tmp/topotests/ -name '*perf.data*'
+   /tmp/topotests/config_timing.test_config_timing/r1/perf.data
+
+To specify additional arguments for ``rr record``, one can use the
+``--rr-options``.
+
+.. _code_coverage:
+
+Code coverage
+"""""""""""""
+Code coverage reporting requires installation of the ``gcov`` and ``lcov``
+packages.
+
+Code coverage can automatically be gathered for any topotest run. To support
+this FRR must first be compiled with the ``--enable-gcov`` configure option.
+This will cause *.gnco files to be created during the build. When topotests are
+run the statistics are generated and stored in *.gcda files. Topotest
+infrastructure will gather these files, capture the information into a
+``coverage.info`` ``lcov`` file and also report the coverage summary.
+
+To enable code coverage support pass the ``--cov-topotest`` argument to pytest.
+If you build your FRR in a directory outside of the FRR source directory you
+will also need to pass the ``--cov-frr-build-dir`` argument specifying the build
+directory location.
+
+During the topotest run the *.gcda files are generated into a ``gcda``
+sub-directory of the top-level run directory (i.e., normally
+``/tmp/topotests/gcda``). These files will then be copied at the end of the
+topotest run into the FRR build directory where the ``gcov`` and ``lcov``
+utilities expect to find them. This is done to deal with the various different
+file ownership and permissions.
+
+At the end of the run ``lcov`` will be run to capture all of the coverage data
+into a ``coverage.info`` file. This file will be located in the top-level run
+directory (i.e., normally ``/tmp/topotests/coverage.info``).
+
+The ``coverage.info`` file can then be used to generate coverage reports or file
+markup (e.g., using the ``genhtml`` utility) or enable markup within your
+IDE/editor if supported (e.g., the emacs ``cov-mode`` package)
+
+NOTE: the *.gcda files in ``/tmp/topotests/gcda`` are cumulative so if you do
+not remove them they will aggregate data across multiple topotest runs.
+
 
 .. _topotests_docker:
 

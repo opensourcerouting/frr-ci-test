@@ -140,6 +140,12 @@ int ls_node_same(struct ls_node *n1, struct ls_node *n2)
 		if (CHECK_FLAG(n1->flags, LS_NODE_MSD) && (n1->msd != n2->msd))
 			return 0;
 	}
+	if (CHECK_FLAG(n1->flags, LS_NODE_SRV6)) {
+		if (n1->srv6_cap_flags != n2->srv6_cap_flags)
+			return 0;
+		if (memcmp(&n1->srv6_msd, &n2->srv6_msd, sizeof(n1->srv6_msd)))
+			return 0;
+	}
 
 	/* OK, n1 & n2 are equal */
 	return 1;
@@ -318,6 +324,23 @@ int ls_attributes_same(struct ls_attributes *l1, struct ls_attributes *l2)
 		    && (i < ADJ_PRI_IPV6)
 		    && (!IPV4_ADDR_SAME(&l1->adj_sid[i].neighbor.addr,
 					&l2->adj_sid[i].neighbor.addr)))
+			return 0;
+	}
+	for (int i = 0; i < ADJ_SRV6_MAX; i++) {
+		if (!CHECK_FLAG(l1->flags, (LS_ATTR_ADJ_SRV6SID << i)))
+			continue;
+		if (memcmp(&l1->adj_srv6_sid[i].sid, &l2->adj_srv6_sid[i].sid,
+			   sizeof(struct in6_addr)) ||
+		    (l1->adj_srv6_sid[i].flags != l2->adj_srv6_sid[i].flags) ||
+		    (l1->adj_srv6_sid[i].weight != l2->adj_srv6_sid[i].weight) ||
+		    (l1->adj_srv6_sid[i].endpoint_behavior !=
+		     l2->adj_srv6_sid[i].endpoint_behavior))
+			return 0;
+		if (((l1->adv.origin == ISIS_L1) ||
+		     (l1->adv.origin == ISIS_L2)) &&
+		    (memcmp(&l1->adj_srv6_sid[i].neighbor.sysid,
+			    &l2->adj_srv6_sid[i].neighbor.sysid,
+			    ISO_SYS_ID_LEN) != 0))
 			return 0;
 	}
 	if (CHECK_FLAG(l1->flags, LS_ATTR_SRLG)
@@ -523,7 +546,9 @@ struct ls_vertex *ls_vertex_update(struct ls_ted *ted, struct ls_node *node)
 		if (!ls_node_same(old->node, node)) {
 			ls_node_del(old->node);
 			old->node = node;
-		}
+		} else
+			ls_node_del(node);
+
 		old->status = UPDATE;
 		return old;
 	}
@@ -805,7 +830,9 @@ struct ls_edge *ls_edge_update(struct ls_ted *ted,
 		if (!ls_attributes_same(old->attributes, attributes)) {
 			ls_attributes_del(old->attributes);
 			old->attributes = attributes;
-		}
+		} else
+			ls_attributes_del(attributes);
+
 		old->status = UPDATE;
 		return old;
 	}
@@ -902,7 +929,9 @@ struct ls_subnet *ls_subnet_update(struct ls_ted *ted, struct ls_prefix *pref)
 		if (!ls_prefix_same(old->ls_pref, pref)) {
 			ls_prefix_del(old->ls_pref);
 			old->ls_pref = pref;
-		}
+		} else
+			ls_prefix_del(pref);
+
 		old->status = UPDATE;
 		return old;
 	}
@@ -1138,31 +1167,13 @@ int ls_unregister(struct zclient *zclient, bool server)
 
 int ls_request_sync(struct zclient *zclient)
 {
-	struct stream *s;
-	uint16_t flags = 0;
-
 	/* Check buffer size */
 	if (STREAM_SIZE(zclient->obuf)
 	    < (ZEBRA_HEADER_SIZE + 3 * sizeof(uint32_t)))
 		return -1;
 
-	s = zclient->obuf;
-	stream_reset(s);
-
-	zclient_create_header(s, ZEBRA_OPAQUE_MESSAGE, VRF_DEFAULT);
-
-	/* Set type and flags */
-	stream_putl(s, LINK_STATE_SYNC);
-	stream_putw(s, flags);
-	/* Send destination client info */
-	stream_putc(s, zclient->redist_default);
-	stream_putw(s, zclient->instance);
-	stream_putl(s, zclient->session_id);
-
-	/* Put length into the header at the start of the stream. */
-	stream_putw_at(s, 0, stream_get_endp(s));
-
-	return zclient_send_message(zclient);
+	/* No data with this message */
+	return zclient_send_opaque(zclient, LINK_STATE_SYNC, NULL, 0);
 }
 
 static struct ls_node *ls_parse_node(struct stream *s)
@@ -1309,6 +1320,26 @@ static struct ls_attributes *ls_parse_attributes(struct stream *s)
 		STREAM_GETC(s, attr->adj_sid[ADJ_BCK_IPV6].weight);
 		STREAM_GET(attr->adj_sid[ADJ_BCK_IPV6].neighbor.sysid, s,
 			   ISO_SYS_ID_LEN);
+	}
+	if (CHECK_FLAG(attr->flags, LS_ATTR_ADJ_SRV6SID)) {
+		STREAM_GET(&attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].sid, s,
+			   sizeof(struct in6_addr));
+		STREAM_GETC(s, attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].flags);
+		STREAM_GETC(s, attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].weight);
+		STREAM_GETW(s, attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6]
+				       .endpoint_behavior);
+		STREAM_GET(attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].neighbor.sysid,
+			   s, ISO_SYS_ID_LEN);
+	}
+	if (CHECK_FLAG(attr->flags, LS_ATTR_BCK_ADJ_SRV6SID)) {
+		STREAM_GET(&attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].sid, s,
+			   sizeof(struct in6_addr));
+		STREAM_GETC(s, attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].flags);
+		STREAM_GETC(s, attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].weight);
+		STREAM_GETW(s, attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6]
+				       .endpoint_behavior);
+		STREAM_GET(attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].neighbor.sysid,
+			   s, ISO_SYS_ID_LEN);
 	}
 	if (CHECK_FLAG(attr->flags, LS_ATTR_SRLG)) {
 		STREAM_GETC(s, len);
@@ -1544,6 +1575,28 @@ static int ls_format_attributes(struct stream *s, struct ls_attributes *attr)
 		stream_put(s, attr->adj_sid[ADJ_BCK_IPV6].neighbor.sysid,
 			   ISO_SYS_ID_LEN);
 	}
+	if (CHECK_FLAG(attr->flags, LS_ATTR_ADJ_SRV6SID)) {
+		stream_put(s, &attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].sid,
+			   sizeof(struct in6_addr));
+		stream_putc(s, attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].flags);
+		stream_putc(s, attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].weight);
+		stream_putw(s, attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6]
+				       .endpoint_behavior);
+		stream_put(s,
+			   attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].neighbor.sysid,
+			   ISO_SYS_ID_LEN);
+	}
+	if (CHECK_FLAG(attr->flags, LS_ATTR_BCK_ADJ_SRV6SID)) {
+		stream_put(s, &attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].sid,
+			   sizeof(struct in6_addr));
+		stream_putc(s, attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].flags);
+		stream_putc(s, attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].weight);
+		stream_putw(s, attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6]
+				       .endpoint_behavior);
+		stream_put(s,
+			   attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].neighbor.sysid,
+			   ISO_SYS_ID_LEN);
+	}
 	if (CHECK_FLAG(attr->flags, LS_ATTR_SRLG)) {
 		stream_putc(s, attr->srlg_len);
 		for (len = 0; len < attr->srlg_len; len++)
@@ -1623,23 +1676,15 @@ int ls_send_msg(struct zclient *zclient, struct ls_message *msg,
 	    (ZEBRA_HEADER_SIZE + sizeof(uint32_t) + sizeof(msg)))
 		return -1;
 
+	/* Init the message, then encode the data inline. */
+	if (dst == NULL)
+		zapi_opaque_init(zclient, LINK_STATE_UPDATE, flags);
+	else
+		zapi_opaque_unicast_init(zclient, LINK_STATE_UPDATE, flags,
+					 dst->proto, dst->instance,
+					 dst->session_id);
+
 	s = zclient->obuf;
-	stream_reset(s);
-
-	zclient_create_header(s, ZEBRA_OPAQUE_MESSAGE, VRF_DEFAULT);
-
-	/* Set sub-type, flags and destination for unicast message */
-	stream_putl(s, LINK_STATE_UPDATE);
-	if (dst != NULL) {
-		SET_FLAG(flags, ZAPI_OPAQUE_FLAG_UNICAST);
-		stream_putw(s, flags);
-		/* Send destination client info */
-		stream_putc(s, dst->proto);
-		stream_putw(s, dst->instance);
-		stream_putl(s, dst->session_id);
-	} else {
-		stream_putw(s, flags);
-	}
 
 	/* Format Link State message */
 	if (ls_format_msg(s, msg) < 0) {
@@ -1759,7 +1804,7 @@ struct ls_message *ls_subnet2msg(struct ls_message *msg,
 struct ls_vertex *ls_msg2vertex(struct ls_ted *ted, struct ls_message *msg,
 				bool delete)
 {
-	struct ls_node *node = (struct ls_node *)msg->data.node;
+	struct ls_node *node = msg->data.node;
 	struct ls_vertex *vertex = NULL;
 
 	switch (msg->event) {
@@ -1799,7 +1844,7 @@ struct ls_vertex *ls_msg2vertex(struct ls_ted *ted, struct ls_message *msg,
 struct ls_edge *ls_msg2edge(struct ls_ted *ted, struct ls_message *msg,
 			    bool delete)
 {
-	struct ls_attributes *attr = (struct ls_attributes *)msg->data.attr;
+	struct ls_attributes *attr = msg->data.attr;
 	struct ls_edge *edge = NULL;
 
 	switch (msg->event) {
@@ -1839,7 +1884,7 @@ struct ls_edge *ls_msg2edge(struct ls_ted *ted, struct ls_message *msg,
 struct ls_subnet *ls_msg2subnet(struct ls_ted *ted, struct ls_message *msg,
 				bool delete)
 {
-	struct ls_prefix *pref = (struct ls_prefix *)msg->data.prefix;
+	struct ls_prefix *pref = msg->data.prefix;
 	struct ls_subnet *subnet = NULL;
 
 	switch (msg->event) {
@@ -2371,6 +2416,24 @@ static void ls_show_edge_vty(struct ls_edge *edge, struct vty *vty,
 			  attr->adj_sid[ADJ_BCK_IPV6].flags,
 			  attr->adj_sid[ADJ_BCK_IPV6].weight);
 	}
+	if (CHECK_FLAG(attr->flags, LS_ATTR_ADJ_SRV6SID)) {
+		sbuf_push(&sbuf, 4, "IPv6 Adjacency-SRV6-SID: %pI6",
+			  &attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].sid);
+		sbuf_push(&sbuf, 0,
+			  "\tFlags: 0x%x\tWeight: 0x%x\tbehavior: 0x%x\n",
+			  attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].flags,
+			  attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].weight,
+			  attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].endpoint_behavior);
+	}
+	if (CHECK_FLAG(attr->flags, LS_ATTR_BCK_ADJ_SRV6SID)) {
+		sbuf_push(&sbuf, 4, "IPv6 Bck. Adjacency-SRV6-SID: %pI6",
+			  &attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].sid);
+		sbuf_push(&sbuf, 0,
+			  "\tFlags: 0x%x\tWeight: 0x%x\tbehavior: 0x%x\n",
+			  attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].flags,
+			  attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].weight,
+			  attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].endpoint_behavior);
+	}
 	if (CHECK_FLAG(attr->flags, LS_ATTR_SRLG)) {
 		sbuf_push(&sbuf, 4, "SRLGs: %d", attr->srlg_len);
 		for (int i = 1; i < attr->srlg_len; i++) {
@@ -2392,7 +2455,7 @@ static void ls_show_edge_json(struct ls_edge *edge, struct json_object *json)
 	struct ls_attributes *attr;
 	struct json_object *jte, *jbw, *jobj, *jsr = NULL, *jsrlg, *js_ext_ag,
 					      *js_ext_ag_arr_word,
-					      *js_ext_ag_arr_bit;
+					      *js_ext_ag_arr_bit, *jsrv6 = NULL;
 	char buf[INET6_BUFSIZ];
 	char buf_ag[strlen("0xffffffff") + 1];
 	uint32_t bitmap;
@@ -2575,6 +2638,45 @@ static void ls_show_edge_json(struct ls_edge *edge, struct json_object *json)
 		json_object_string_add(jobj, "flags", buf);
 		json_object_int_add(jobj, "weight",
 				    attr->adj_sid[ADJ_BCK_IPV6].weight);
+		json_object_array_add(jsr, jobj);
+	}
+	if (CHECK_FLAG(attr->flags, LS_ATTR_ADJ_SRV6SID)) {
+		jsrv6 = json_object_new_array();
+		json_object_object_add(json, "segment-routing-ipv6", jsrv6);
+		jobj = json_object_new_object();
+		snprintfrr(buf, INET6_BUFSIZ, "%pI6",
+			   &attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].sid);
+		json_object_string_add(jobj, "adj-sid", buf);
+		snprintfrr(buf, 6, "0x%x",
+			   attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].flags);
+		json_object_string_add(jobj, "flags", buf);
+		json_object_int_add(jobj, "weight",
+				    attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6].weight);
+		snprintfrr(buf, 6, "0x%x",
+			   attr->adj_srv6_sid[ADJ_SRV6_PRI_IPV6]
+				   .endpoint_behavior);
+		json_object_string_add(jobj, "endpoint-behavior", buf);
+		json_object_array_add(jsr, jobj);
+	}
+	if (CHECK_FLAG(attr->flags, LS_ATTR_BCK_ADJ_SRV6SID)) {
+		if (!jsrv6) {
+			jsrv6 = json_object_new_array();
+			json_object_object_add(json, "segment-routing-ipv6",
+					       jsrv6);
+		}
+		jobj = json_object_new_object();
+		snprintfrr(buf, INET6_BUFSIZ, "%pI6",
+			   &attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].sid);
+		json_object_string_add(jobj, "adj-sid", buf);
+		snprintfrr(buf, 6, "0x%x",
+			   attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].flags);
+		json_object_string_add(jobj, "flags", buf);
+		json_object_int_add(jobj, "weight",
+				    attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6].weight);
+		snprintfrr(buf, 6, "0x%x",
+			   attr->adj_srv6_sid[ADJ_SRV6_BCK_IPV6]
+				   .endpoint_behavior);
+		json_object_string_add(jobj, "endpoint-behavior", buf);
 		json_object_array_add(jsr, jobj);
 	}
 }

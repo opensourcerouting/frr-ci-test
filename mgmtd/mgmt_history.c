@@ -63,7 +63,7 @@ static struct mgmt_cmt_info_t *mgmt_history_new_cmt_info(void)
 	mgmt_time_to_string(&tv, true, new->time_str, sizeof(new->time_str));
 	mgmt_time_to_string(&tv, false, new->cmtid_str, sizeof(new->cmtid_str));
 	snprintf(new->cmt_json_file, sizeof(new->cmt_json_file),
-		 MGMTD_COMMIT_FILE_PATH, new->cmtid_str);
+		 MGMTD_COMMIT_FILE_PATH(new->cmtid_str));
 
 	return new;
 }
@@ -104,18 +104,21 @@ mgmt_history_find_cmt_record(const char *cmtid_str)
 
 static bool mgmt_history_read_cmt_record_index(void)
 {
+	char index_path[MAXPATHLEN];
 	FILE *fp;
 	struct mgmt_cmt_info_t cmt_info;
 	struct mgmt_cmt_info_t *new;
 	int cnt = 0;
 
-	if (!file_exists(MGMTD_COMMIT_FILE_PATH))
-		return false;
+	snprintf(index_path, sizeof(index_path), MGMTD_COMMIT_INDEX_FILE_PATH);
 
-	fp = fopen(MGMTD_COMMIT_INDEX_FILE_NAME, "rb");
+	fp = fopen(index_path, "rb");
 	if (!fp) {
-		zlog_err("Failed to open commit history %s for reading: %s",
-			 MGMTD_COMMIT_INDEX_FILE_NAME, safe_strerror(errno));
+		if (errno == ENOENT || errno == ENOTDIR)
+			return false;
+
+		zlog_err("Failed to open commit history %pSQq for reading: %m",
+			 index_path);
 		return false;
 	}
 
@@ -132,9 +135,8 @@ static bool mgmt_history_read_cmt_record_index(void)
 			memcpy(new, &cmt_info, sizeof(struct mgmt_cmt_info_t));
 			mgmt_cmt_infos_add_tail(&mm->cmts, new);
 		} else {
-			zlog_warn(
-				"More records found in commit history file %s than expected",
-				MGMTD_COMMIT_INDEX_FILE_NAME);
+			zlog_warn("More records found in commit history file %pSQq than expected",
+				  index_path);
 			fclose(fp);
 			return false;
 		}
@@ -148,16 +150,19 @@ static bool mgmt_history_read_cmt_record_index(void)
 
 static bool mgmt_history_dump_cmt_record_index(void)
 {
+	char index_path[MAXPATHLEN];
 	FILE *fp;
 	int ret = 0;
 	struct mgmt_cmt_info_t *cmt_info;
 	struct mgmt_cmt_info_t cmt_info_set[10];
 	int cnt = 0;
 
-	fp = fopen(MGMTD_COMMIT_INDEX_FILE_NAME, "wb");
+	snprintf(index_path, sizeof(index_path), MGMTD_COMMIT_INDEX_FILE_PATH);
+
+	fp = fopen(index_path, "wb");
 	if (!fp) {
-		zlog_err("Failed to open commit history %s for writing: %s",
-			 MGMTD_COMMIT_INDEX_FILE_NAME, safe_strerror(errno));
+		zlog_err("Failed to open commit history %pSQq for writing: %m",
+			 index_path);
 		return false;
 	}
 
@@ -176,7 +181,7 @@ static bool mgmt_history_dump_cmt_record_index(void)
 	fclose(fp);
 	if (ret != cnt) {
 		zlog_err("Failed to write full commit history, removing file");
-		remove_file(MGMTD_COMMIT_INDEX_FILE_NAME);
+		remove_file(index_path);
 		return false;
 	}
 	return true;
@@ -196,23 +201,21 @@ static int mgmt_history_rollback_to_cmt(struct vty *vty,
 	}
 
 	src_ds_ctx = mgmt_ds_get_ctx_by_id(mm, MGMTD_DS_CANDIDATE);
-	if (!src_ds_ctx) {
-		vty_out(vty, "ERROR: Couldnot access Candidate datastore!\n");
-		return -1;
-	}
-
-	/*
-	 * Note: Write lock on src_ds is not required. This is already
-	 * taken in 'conf te'.
-	 */
 	dst_ds_ctx = mgmt_ds_get_ctx_by_id(mm, MGMTD_DS_RUNNING);
-	if (!dst_ds_ctx) {
-		vty_out(vty, "ERROR: Couldnot access Running datastore!\n");
+	assert(src_ds_ctx);
+	assert(dst_ds_ctx);
+
+	ret = mgmt_ds_lock(src_ds_ctx, vty->mgmt_session_id);
+	if (ret != 0) {
+		vty_out(vty,
+			"Failed to lock the DS %u for rollback Reason: %s!\n",
+			MGMTD_DS_RUNNING, strerror(ret));
 		return -1;
 	}
 
-	ret = mgmt_ds_write_lock(dst_ds_ctx);
+	ret = mgmt_ds_lock(dst_ds_ctx, vty->mgmt_session_id);
 	if (ret != 0) {
+		mgmt_ds_unlock(src_ds_ctx);
 		vty_out(vty,
 			"Failed to lock the DS %u for rollback Reason: %s!\n",
 			MGMTD_DS_RUNNING, strerror(ret));
@@ -223,39 +226,49 @@ static int mgmt_history_rollback_to_cmt(struct vty *vty,
 		ret = mgmt_ds_load_config_from_file(
 			src_ds_ctx, cmt_info->cmt_json_file, false);
 		if (ret != 0) {
-			mgmt_ds_unlock(dst_ds_ctx);
 			vty_out(vty,
 				"Error with parsing the file with error code %d\n",
 				ret);
-			return ret;
+			goto failed_unlock;
 		}
 	}
 
 	/* Internally trigger a commit-request. */
 	ret = mgmt_txn_rollback_trigger_cfg_apply(src_ds_ctx, dst_ds_ctx);
 	if (ret != 0) {
-		mgmt_ds_unlock(dst_ds_ctx);
 		vty_out(vty,
 			"Error with creating commit apply txn with error code %d\n",
 			ret);
-		return ret;
+		goto failed_unlock;
 	}
 
 	mgmt_history_dump_cmt_record_index();
+
+	/*
+	 * TODO: Cleanup: the generic TXN code currently checks for rollback
+	 * and does the unlock when it completes.
+	 */
 
 	/*
 	 * Block the rollback command from returning till the rollback
 	 * is completed. On rollback completion mgmt_history_rollback_complete()
 	 * shall be called to resume the rollback command return to VTYSH.
 	 */
-	vty->mgmt_req_pending = true;
+	vty->mgmt_req_pending_cmd = "ROLLBACK";
 	rollback_vty = vty;
 	return 0;
+
+failed_unlock:
+	mgmt_ds_unlock(src_ds_ctx);
+	mgmt_ds_unlock(dst_ds_ctx);
+	return ret;
 }
 
 void mgmt_history_rollback_complete(bool success)
 {
-	vty_mgmt_resume_response(rollback_vty, success);
+	vty_mgmt_resume_response(rollback_vty,
+				 success ? CMD_SUCCESS
+					 : CMD_WARNING_CONFIG_FAILED);
 	rollback_vty = NULL;
 }
 

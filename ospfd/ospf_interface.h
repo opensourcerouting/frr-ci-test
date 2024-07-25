@@ -10,8 +10,10 @@
 #include "lib/bfd.h"
 #include "qobj.h"
 #include "hook.h"
+#include "keychain.h"
 #include "ospfd/ospf_packet.h"
 #include "ospfd/ospf_spf.h"
+#include <ospfd/ospf_flood.h>
 
 #define IF_OSPF_IF_INFO(I) ((struct ospf_if_info *)((I)->info))
 #define IF_DEF_PARAMS(I) (IF_OSPF_IF_INFO (I)->def_params)
@@ -46,6 +48,8 @@ struct ospf_if_params {
 			 output_cost_cmd); /* Command Interface Output Cost */
 	DECLARE_IF_PARAM(uint32_t,
 			 retransmit_interval); /* Retransmission Interval */
+	DECLARE_IF_PARAM(uint32_t,
+			 retransmit_window); /* Retransmission Window */
 	DECLARE_IF_PARAM(uint8_t, passive_interface); /* OSPF Interface is
 							passive: no sending or
 							receiving (no need to
@@ -56,6 +60,7 @@ struct ospf_if_params {
 	DECLARE_IF_PARAM(struct in_addr, if_area);
 	uint32_t if_area_id_fmt;
 
+	bool type_cfg;
 	DECLARE_IF_PARAM(uint8_t, type); /* type of interface */
 #define OSPF_IF_ACTIVE                  0
 #define OSPF_IF_PASSIVE		        1
@@ -81,6 +86,9 @@ struct ospf_if_params {
 	/* Fast-Hellos */
 	DECLARE_IF_PARAM(uint8_t, fast_hello);
 
+	/* Prefix-Suppression */
+	DECLARE_IF_PARAM(bool, prefix_suppression);
+
 	/* Authentication data. */
 	uint8_t auth_simple[OSPF_AUTH_SIMPLE_SIZE + 1]; /* Simple password. */
 	uint8_t auth_simple__config : 1;
@@ -88,6 +96,8 @@ struct ospf_if_params {
 	DECLARE_IF_PARAM(struct list *,
 			 auth_crypt);     /* List of Auth cryptographic data. */
 	DECLARE_IF_PARAM(int, auth_type); /* OSPF authentication type */
+
+	DECLARE_IF_PARAM(char*, keychain_name); /* OSPF HMAC Cryptographic Authentication*/
 
 	/* Other, non-configuration state */
 	uint32_t network_lsa_seqnum; /* Network LSA seqnum */
@@ -112,6 +122,15 @@ struct ospf_if_params {
 
 	/* point-to-multipoint delayed reflooding configuration */
 	bool p2mp_delay_reflood;
+
+	/* point-to-multipoint doesn't support broadcast */
+	bool p2mp_non_broadcast;
+
+	/* Opaque LSA capability at interface level (see RFC5250) */
+	DECLARE_IF_PARAM(bool, opaque_capable);
+
+	/* Name of prefix-list name for packet source address filtering. */
+	DECLARE_IF_PARAM(char *, nbr_filter_name);
 };
 
 enum { MEMBER_ALLROUTERS = 0,
@@ -176,12 +195,19 @@ struct ospf_interface {
 
 	/* OSPF Network Type. */
 	uint8_t type;
+#define OSPF_IF_NON_BROADCAST(O)                                               \
+	(((O)->type == OSPF_IFTYPE_NBMA) ||                                    \
+	 ((((O)->type == OSPF_IFTYPE_POINTOMULTIPOINT) &&                      \
+	   (O)->p2mp_non_broadcast)))
 
 	/* point-to-point DMVPN configuration */
 	uint8_t ptp_dmvpn;
 
 	/* point-to-multipoint delayed reflooding */
 	bool p2mp_delay_reflood;
+
+	/* point-to-multipoint doesn't support broadcast */
+	bool p2mp_non_broadcast;
 
 	/* State of Interface State Machine. */
 	uint8_t state;
@@ -223,6 +249,9 @@ struct ospf_interface {
 	/* List of configured NBMA neighbor. */
 	struct list *nbr_nbma;
 
+	/* Configured prefix-list for filtering neighbors. */
+	struct prefix_list *nbr_filter;
+
 	/* Graceful-Restart data. */
 	struct {
 		struct {
@@ -237,20 +266,20 @@ struct ospf_interface {
 
 	struct route_table *ls_upd_queue;
 
-	struct list *ls_ack; /* Link State Acknowledgment list. */
-
-	struct {
-		struct list *ls_ack;
-		struct in_addr dst;
-	} ls_ack_direct;
+	/*
+	 * List of LSAs for delayed and direct link
+	 * state acknowledgment transmission.
+	 */
+	struct ospf_lsa_list_head ls_ack_delayed;
+	struct ospf_lsa_list_head ls_ack_direct;
 
 	/* Timer values. */
-	uint32_t v_ls_ack; /* Delayed Link State Acknowledgment */
+	uint32_t v_ls_ack_delayed; /* Delayed Link State Acknowledgment */
 
 	/* Threads. */
 	struct event *t_hello;		 /* timer */
 	struct event *t_wait;		 /* timer */
-	struct event *t_ls_ack;		 /* timer */
+	struct event *t_ls_ack_delayed;	 /* timer */
 	struct event *t_ls_ack_direct;	 /* event */
 	struct event *t_ls_upd_event;	 /* event */
 	struct event *t_opaque_lsa_self; /* Type-9 Opaque-LSAs */
@@ -270,8 +299,13 @@ struct ospf_interface {
 	uint32_t ls_ack_out;   /* LS Ack message output count. */
 	uint32_t discarded;    /* discarded input count by error. */
 	uint32_t state_change; /* Number of status change. */
+	uint32_t ls_rxmt_lsa;  /* Number of LSAs retransmitted. */
 
 	uint32_t full_nbrs;
+
+	/* Buffered values for keychain and key */
+	struct keychain *keychain;
+	struct key *key;
 
 	QOBJ_FIELDS;
 };
@@ -287,7 +321,6 @@ extern int ospf_if_up(struct ospf_interface *oi);
 extern int ospf_if_down(struct ospf_interface *oi);
 
 extern int ospf_if_is_up(struct ospf_interface *oi);
-extern struct ospf_interface *ospf_if_exists(struct ospf_interface *oi);
 extern struct ospf_interface *ospf_if_lookup_by_lsa_pos(struct ospf_area *area,
 							int lsa_pos);
 extern struct ospf_interface *
@@ -314,7 +347,6 @@ extern void ospf_if_update_params(struct interface *ifp, struct in_addr addr);
 extern int ospf_if_new_hook(struct interface *ifp);
 extern void ospf_if_init(void);
 extern void ospf_if_stream_unset(struct ospf_interface *oi);
-extern void ospf_if_reset_variables(struct ospf_interface *oi);
 extern int ospf_if_is_enable(struct ospf_interface *oi);
 extern int ospf_if_get_output_cost(struct ospf_interface *oi);
 extern void ospf_if_recalculate_output_cost(struct interface *ifp);
@@ -346,6 +378,7 @@ extern void ospf_crypt_key_add(struct list *list, struct crypt_key *key);
 extern int ospf_crypt_key_delete(struct list *list, uint8_t key_id);
 extern uint8_t ospf_default_iftype(struct interface *ifp);
 extern int ospf_interface_neighbor_count(struct ospf_interface *oi);
+extern void ospf_intf_neighbor_filter_apply(struct ospf_interface *oi);
 
 /* Set all multicast memberships appropriately based on the type and
    state of the interface. */

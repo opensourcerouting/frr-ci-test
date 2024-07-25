@@ -82,12 +82,16 @@ enum node_type {
 	AUTH_ENABLE_NODE,	/* Authentication mode for change enable. */
 	ENABLE_NODE,		 /* Enable node. */
 	CONFIG_NODE,		 /* Config node. Default mode of config file. */
+	PREFIX_NODE, /* ip prefix-list node. */
+	PREFIX_IPV6_NODE, /* ipv6 prefix-list node. */
 	DEBUG_NODE,		 /* Debug node. */
 	VRF_DEBUG_NODE,		 /* Vrf Debug node. */
 	NORTHBOUND_DEBUG_NODE,	 /* Northbound Debug node. */
 	DEBUG_VNC_NODE,		 /* Debug VNC node. */
 	RMAP_DEBUG_NODE,         /* Route-map debug node */
 	RESOLVER_DEBUG_NODE,	 /* Resolver debug node */
+	MGMT_BE_DEBUG_NODE,	 /* mgmtd backend-client debug node */
+	MGMT_FE_DEBUG_NODE,	 /* mgmtd frontend-client debug node */
 	AAA_NODE,		 /* AAA node. */
 	EXTLOG_NODE,		 /* RFC5424 & co. extended syslog */
 	KEYCHAIN_NODE,		 /* Key-chain node. */
@@ -131,10 +135,8 @@ enum node_type {
 	ISIS_NODE,		 /* ISIS protocol mode */
 	ISIS_FLEX_ALGO_NODE,    /* ISIS Flex Algo mode */
 	ACCESS_NODE,		 /* Access list node. */
-	PREFIX_NODE,		 /* Prefix list node. */
 	ACCESS_IPV6_NODE,	/* Access list node. */
 	ACCESS_MAC_NODE,	 /* MAC access list node*/
-	PREFIX_IPV6_NODE,	/* Prefix list node. */
 	AS_LIST_NODE,		 /* AS list node. */
 	COMMUNITY_LIST_NODE,     /* Community list node. */
 	COMMUNITY_ALIAS_NODE, /* Community alias node. */
@@ -158,6 +160,10 @@ enum node_type {
 	SRV6_NODE,		 /* SRv6 node */
 	SRV6_LOCS_NODE,		 /* SRv6 locators node */
 	SRV6_LOC_NODE,		 /* SRv6 locator node */
+	SRV6_ENCAP_NODE,		 /* SRv6 encapsulation node */
+	SRV6_SID_FORMATS_NODE,		 /* SRv6 SID formats config node */
+	SRV6_SID_FORMAT_USID_F3216_NODE,		 /* SRv6 uSID f3216 format config node */
+	SRV6_SID_FORMAT_UNCOMPRESSED_F4024_NODE,		 /* SRv6 uncompressed f4024 format config node */
 	VTY_NODE,		 /* Vty node. */
 	FPM_NODE,		 /* Dataplane FPM node. */
 	LINK_PARAMS_NODE,	/* Link-parameters node */
@@ -172,6 +178,12 @@ enum node_type {
 	OPENFABRIC_NODE,	/* OpenFabric router configuration node */
 	VRRP_NODE,		 /* VRRP node */
 	BMP_NODE,		/* BMP config under router bgp */
+	ISIS_SRV6_NODE,    /* ISIS SRv6 node */
+	ISIS_SRV6_NODE_MSD_NODE,    /* ISIS SRv6 Node MSDs node */
+	MGMTD_NODE,		 /* MGMTD node. */
+	RPKI_VRF_NODE,  /* RPKI node for VRF */
+	PIM_NODE,		 /* PIM protocol mode */
+	PIM6_NODE,		 /* PIM protocol for IPv6 mode */
 	NODE_TYPE_MAX, /* maximum */
 };
 /* clang-format on */
@@ -284,6 +296,10 @@ struct cmd_node {
 #define DEFPY_YANG(funcname, cmdname, cmdstr, helpstr)                         \
 	DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr, CMD_ATTR_YANG)
 
+#define DEFPY_YANG_HIDDEN(funcname, cmdname, cmdstr, helpstr)                  \
+	DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr,                         \
+		   CMD_ATTR_YANG | CMD_ATTR_HIDDEN)
+
 #define DEFPY_YANG_NOSH(funcname, cmdname, cmdstr, helpstr)                    \
 	DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr,                         \
 		   CMD_ATTR_YANG | CMD_ATTR_NOSH)
@@ -307,6 +323,10 @@ struct cmd_node {
 /* DEFUN_NOSH for commands that vtysh should ignore */
 #define DEFUN_NOSH(funcname, cmdname, cmdstr, helpstr)                         \
 	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr, CMD_ATTR_NOSH)
+
+#define DEFUN_YANG_HIDDEN(funcname, cmdname, cmdstr, helpstr)                  \
+	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr,                         \
+		   CMD_ATTR_YANG | CMD_ATTR_HIDDEN)
 
 #define DEFUN_YANG_NOSH(funcname, cmdname, cmdstr, helpstr)                    \
 	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr,                         \
@@ -416,6 +436,10 @@ struct cmd_node {
 #define COMMUNITY_AANN_STR "Community number where AA and NN are (0-65535)\n"
 #define COMMUNITY_VAL_STR                                                      \
 	"Community number in AA:NN format (where AA and NN are (0-65535)) or local-AS|no-advertise|no-export|internet|graceful-shutdown|accept-own-nexthop|accept-own|route-filter-translated-v4|route-filter-v4|route-filter-translated-v6|route-filter-v6|llgr-stale|no-llgr|blackhole|no-peer or additive\n"
+#define EXTCOMM_LIST_CMD_STR "<(1-99)|(100-500)|EXTCOMMUNITY_LIST_NAME>"
+#define EXTCOMM_STD_LIST_NUM_STR "Extended community-list number (standard)\n"
+#define EXTCOMM_EXP_LIST_NUM_STR "Extended community-list number (expanded)\n"
+#define EXTCOMM_LIST_NAME_STR "Extended community-list name\n"
 #define MPLS_TE_STR "MPLS-TE specific commands\n"
 #define LINK_PARAMS_STR "Configure interface link parameters\n"
 #define OSPF_RI_STR "OSPF Router Information specific commands\n"
@@ -443,6 +467,8 @@ struct cmd_node {
 #define MPLS_LDP_SYNC_HOLDDOWN_STR                                             \
 	"Time to wait for LDP-SYNC to occur before restoring if cost\n"
 #define NO_MPLS_LDP_SYNC_HOLDDOWN_STR "holddown timer disable\n"
+#define BGP_AF_STR "Address Family\n"
+#define BGP_AF_MODIFIER_STR "Address Family modifier\n"
 
 /* Command warnings. */
 #define NO_PASSWD_CMD_WARNING                                                  \
@@ -617,6 +643,7 @@ extern void cmd_banner_motd_line(const char *line);
 
 struct cmd_variable_handler {
 	const char *tokenname, *varname;
+	const char *xpath;	/* fill comps from set of values at xpath */
 	void (*completions)(vector out, struct cmd_token *token);
 };
 

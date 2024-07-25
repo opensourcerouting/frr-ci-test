@@ -58,10 +58,12 @@ extern "C" {
 #define OSPF_HELLO_DELAY_DEFAULT           10
 #define OSPF_ROUTER_PRIORITY_DEFAULT        1
 #define OSPF_RETRANSMIT_INTERVAL_DEFAULT    5
+#define OSPF_RETRANSMIT_WINDOW_DEFAULT	    50 /* milliseconds */
 #define OSPF_TRANSMIT_DELAY_DEFAULT         1
 #define OSPF_DEFAULT_BANDWIDTH		 10000	/* Mbps */
+#define OSPF_ACK_DELAY_DEFAULT		    1
 
-#define OSPF_DEFAULT_REF_BANDWIDTH	100000  /* Mbps */
+#define OSPF_DEFAULT_REF_BANDWIDTH	100000  /* Kbps */
 
 #define OSPF_POLL_INTERVAL_DEFAULT         60
 #define OSPF_NEIGHBOR_PRIORITY_DEFAULT      0
@@ -69,7 +71,9 @@ extern "C" {
 #define OSPF_MTU_IGNORE_DEFAULT             0
 #define OSPF_FAST_HELLO_DEFAULT             0
 #define OSPF_P2MP_DELAY_REFLOOD_DEFAULT	    false
-
+#define OSPF_P2MP_NON_BROADCAST_DEFAULT	    false
+#define OSPF_OPAQUE_CAPABLE_DEFAULT true
+#define OSPF_PREFIX_SUPPRESSION_DEFAULT	    false
 #define OSPF_AREA_BACKBONE              0x00000000      /* 0.0.0.0 */
 #define OSPF_AREA_RANGE_COST_UNSPEC	-1U
 

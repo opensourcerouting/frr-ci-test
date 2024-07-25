@@ -15,7 +15,6 @@ test_zebra_multiple_connected.py: Testing multiple connected
 """
 
 import os
-import re
 import sys
 import pytest
 import json
@@ -29,7 +28,6 @@ sys.path.append(os.path.join(CWD, "../"))
 # Import topogen and topotest helpers
 from lib import topotest
 from lib.topogen import Topogen, TopoRouter, get_topogen
-from lib.topolog import logger
 
 # Required to instantiate the topology builder class.
 
@@ -142,6 +140,23 @@ def test_zebra_system_recursion():
 
     _, result = topotest.run_and_expect(test_func, None, count=20, wait=1)
     assert result is None, "Kernel route is missing from zebra"
+
+
+def test_zebra_noprefix_connected():
+    "Test that a noprefixroute created does not create a connected route"
+
+    tgen = get_topogen()
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    router = tgen.gears["r1"]
+    router.run("ip addr add 192.168.44.1/24 dev r1-eth1 noprefixroute")
+    expected = "% Network not in table"
+    test_func = partial(
+        topotest.router_output_cmp, router, "show ip route 192.168.44.0/24", expected
+    )
+    result, _ = topotest.run_and_expect(test_func, "", count=20, wait=1)
+    assert result, "Connected Route should not have been added"
 
 
 if __name__ == "__main__":

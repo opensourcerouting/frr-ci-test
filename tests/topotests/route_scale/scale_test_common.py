@@ -151,7 +151,7 @@ def route_install_helper(iter):
         logger.info(
             "Limited memory available: {}, skipping x32 testcase".format(total_mem)
         )
-        return;
+        return
 
     installed_file = "{}/r1/installed.routes.json".format(CWD)
     expected_installed = json.loads(open(installed_file).read())
@@ -182,7 +182,6 @@ def route_install_helper(iter):
 
     # Build up a list of dicts with params for each step of the test;
     # use defaults where the step doesn't supply a value
-    scale_setups = []
     s = scale_steps[iter]
 
     d = dict(zip(scale_keys, s))

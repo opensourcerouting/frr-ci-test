@@ -580,6 +580,7 @@ static void ospf_sr_stop(void)
 	hash_clean(OspfSR.neighbors, (void *)sr_node_del);
 	OspfSR.self = NULL;
 	OspfSR.status = SR_OFF;
+	OspfSR.msd = 0;
 }
 
 /*
@@ -2739,9 +2740,9 @@ static void show_sr_node(struct vty *vty, struct json_object *json,
 			if (srn->algo[i] == SR_ALGORITHM_UNSET)
 				continue;
 			json_obj = json_object_new_object();
-			char tmp[2];
+			char tmp[12];
 
-			snprintf(tmp, sizeof(tmp), "%u", i);
+			snprintf(tmp, sizeof(tmp), "%d", i);
 			json_object_string_add(json_obj, tmp,
 					       srn->algo[i] == SR_ALGORITHM_SPF
 						       ? "SPF"

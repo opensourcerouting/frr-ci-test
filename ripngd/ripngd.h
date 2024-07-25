@@ -16,7 +16,6 @@
 /* RIPng version and port number. */
 #define RIPNG_V1                         1
 #define RIPNG_PORT_DEFAULT             521
-#define RIPNG_VTY_PORT                2603
 #define RIPNG_MAX_PACKET_SIZE         1500
 #define RIPNG_PRIORITY_DEFAULT           0
 
@@ -413,7 +412,6 @@ extern int ripng_interface_add(ZAPI_CALLBACK_ARGS);
 extern int ripng_interface_delete(ZAPI_CALLBACK_ARGS);
 extern int ripng_interface_address_add(ZAPI_CALLBACK_ARGS);
 extern int ripng_interface_address_delete(ZAPI_CALLBACK_ARGS);
-extern int ripng_interface_vrf_update(ZAPI_CALLBACK_ARGS);
 extern void ripng_interface_sync(struct interface *ifp);
 
 extern struct ripng *ripng_lookup_by_vrf_id(vrf_id_t vrf_id);
@@ -433,7 +431,6 @@ extern void ripng_ecmp_change(struct ripng *ripng);
 
 extern void ripng_vrf_init(void);
 extern void ripng_vrf_terminate(void);
-extern void ripng_cli_init(void);
 
 extern uint32_t zebra_ecmp_count;
 

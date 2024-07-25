@@ -24,6 +24,8 @@ DECLARE_MTYPE(MSG_CONN);
 #define MGMT_MSG_VERSION_PROTOBUF 0
 #define MGMT_MSG_VERSION_NATIVE 1
 
+/* The absolute maximum message size (16MB) */
+#define MGMT_MSG_MAX_MSG_ALLOC_LEN (16 * 1024 * 1024)
 
 struct mgmt_msg_state {
 	struct stream *ins;
@@ -98,8 +100,8 @@ struct msg_conn {
 			   struct msg_conn *conn);
 	void *user;
 	uint short_circuit_depth;
+	bool is_short_circuit;	/* true when the message being handled is SC */
 	bool is_client;
-	bool is_short_circuit;
 	bool debug;
 };
 
@@ -136,6 +138,10 @@ struct msg_client {
 extern void msg_client_cleanup(struct msg_client *client);
 
 /*
+ * If `short_circuit_ok` is true, then the client-server connection will use a
+ * socketpair() rather than a unix-domain socket. This must be passed true if
+ * you wish to send messages short-circuit later.
+ *
  * `notify_disconnect` is not called when the user `msg_client_cleanup` is
  * called for a client which is currently connected. The socket is closed
  * but there is no notification.

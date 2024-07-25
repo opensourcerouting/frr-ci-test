@@ -11,6 +11,9 @@
 
 #ifdef HAVE_NETLINK
 
+#include <linux/rtnetlink.h>
+#include <linux/neighbour.h>
+
 #include "log.h"
 #include "rib.h"
 #include "vty.h"
@@ -286,6 +289,8 @@ static int netlink_route_info_fill(struct netlink_route_info *ri, int cmd,
 			break;
 
 		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
+			continue;
+		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_DUPLICATE))
 			continue;
 
 		if (nexthop->type == NEXTHOP_TYPE_BLACKHOLE) {
@@ -587,19 +592,19 @@ int zfpm_netlink_encode_mac(struct fpm_mac_info_t *mac, char *in_buf,
 				RTM_DELNEIGH : RTM_NEWNEIGH;
 	req->hdr.nlmsg_flags = NLM_F_REQUEST;
 	if (req->hdr.nlmsg_type == RTM_NEWNEIGH)
-		req->hdr.nlmsg_flags |= (NLM_F_CREATE | NLM_F_REPLACE);
+		SET_FLAG(req->hdr.nlmsg_flags, (NLM_F_CREATE | NLM_F_REPLACE));
 
 	/* Construct ndmsg */
 	req->ndm.ndm_family = AF_BRIDGE;
 	req->ndm.ndm_ifindex = mac->vxlan_if;
 
 	req->ndm.ndm_state = NUD_REACHABLE;
-	req->ndm.ndm_flags |= NTF_SELF | NTF_MASTER;
+	SET_FLAG(req->ndm.ndm_flags, (NTF_SELF | NTF_MASTER));
 	if (CHECK_FLAG(mac->zebra_flags,
 		(ZEBRA_MAC_STICKY | ZEBRA_MAC_REMOTE_DEF_GW)))
-		req->ndm.ndm_state |= NUD_NOARP;
+		SET_FLAG(req->ndm.ndm_state, NUD_NOARP);
 	else
-		req->ndm.ndm_flags |= NTF_EXT_LEARNED;
+		SET_FLAG(req->ndm.ndm_flags, NTF_EXT_LEARNED);
 
 	/* Add attributes */
 	nl_attr_put(&req->hdr, in_buf_len, NDA_LLADDR, &mac->macaddr, 6);

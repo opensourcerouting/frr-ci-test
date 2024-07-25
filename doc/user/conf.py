@@ -18,6 +18,8 @@ import re
 import pygments
 import sphinx
 from sphinx.highlighting import lexers
+from sphinx.domains.std import GenericObject
+from docutils.parsers.rst import directives
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -52,18 +54,18 @@ source_suffix = ".rst"
 master_doc = "index"
 
 # General information about the project.
-project = u"FRR"
-copyright = u"2017, FRR"
-author = u"FRR authors"
+project = "FRR"
+copyright = "2017, FRR"
+author = "FRR authors"
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
 # built documents.
 
 # The short X.Y version.
-version = u"?.?"
+version = "?.?"
 # The full version, including alpha/beta/rc tags.
-release = u"?.?-?"
+release = "?.?-?"
 
 
 # -----------------------------------------------------------------------------
@@ -287,7 +289,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, "FRR.tex", u"FRR User Manual", u"FRR", "manual"),
+    (master_doc, "FRR.tex", "FRR User Manual", "FRR", "manual"),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -315,7 +317,7 @@ latex_logo = "../figures/frr-logo-medium.png"
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [(master_doc, "frr", u"FRR User Manual", [author], 1)]
+man_pages = [(master_doc, "frr", "FRR User Manual", [author], 1)]
 
 # If true, show URL addresses after external links.
 # man_show_urls = False
@@ -330,7 +332,7 @@ texinfo_documents = [
     (
         master_doc,
         "frr",
-        u"FRR User Manual",
+        "FRR User Manual",
         author,
         "FRR",
         "One line description of project.",
@@ -358,6 +360,7 @@ texinfo_documents = [
 with open("../extra/frrlexer.py", "rb") as lex:
     frrlexerpy = lex.read()
 
+
 # Parse version string into int array
 def vparse(s):
     a = []
@@ -372,11 +375,54 @@ def vparse(s):
     return a[:3]
 
 
-# custom extensions here
+class ClicmdDirective(GenericObject):
+    """
+    Directive for documenting CLI commands.
+
+    The xref string, if no option is provided, will be the verbatim command
+    string. If the :daemon: option is provided, then it's
+    "(<daemon>) <command string>)".
+
+    Options:
+      :daemon: - specify the daemon this command belongs to. Useful for
+                 disambiguating multiple definitions of the same command.
+    """
+
+    has_content = True
+    required_arguments = 1
+    optional_arguments = 0
+    option_spec = {
+        **GenericObject.option_spec,
+        "daemon": directives.unchanged,
+    }
+
+    def handle_signature(self, sig, signode):
+        name = super().handle_signature(sig, signode)
+        daemon = self.options["daemon"] if "daemon" in self.options else ""
+        prefix = f"({daemon}) " if daemon else ""
+        return prefix + name
+
+    def run(self):
+        daemon = self.options["daemon"] if "daemon" in self.options else ""
+        if daemon:
+            self.indextemplate = f"pair: ({daemon}) %s; configuration command"
+        else:
+            self.indextemplate = f"pair: %s; configuration command"
+
+        nodes = super().run()
+
+        return nodes
+
+
 def setup(app):
-    # object type for FRR CLI commands, can be extended to document parent CLI
-    # node later on
-    app.add_object_type("clicmd", "clicmd", indextemplate="pair: %s; configuration command")
+    # Override the directive that was just created for us
+    if int(sphinx.__version__.split(".")[0]) >= 2:
+        app.add_object_type("clicmd", "clicmd", objname="CLI command")
+        app.add_directive_to_domain("std", "clicmd", ClicmdDirective, override=True)
+    else:
+        app.add_object_type(
+            "clicmd", "clicmd", indextemplate="pair: %s; configuration command"
+        )
 
     # I dont care how stupid this is
     if "add_js_file" in dir(app):
@@ -388,7 +434,6 @@ def setup(app):
         app.add_css_file("overrides.css")
     else:
         app.add_stylesheet("overrides.css")
-
 
     # load Pygments lexer for FRR config syntax
     #

@@ -1,12 +1,19 @@
 .. _bfd:
 
-**********************************
-Bidirectional Forwarding Detection
-**********************************
+***
+BFD
+***
 
-:abbr:`BFD (Bidirectional Forwarding Detection)` stands for
-Bidirectional Forwarding Detection and it is described and extended by
-the following RFCs:
+:abbr:`BFD (Bidirectional Forwarding Detection)` is:
+
+  a protocol intended to detect faults in the bidirectional path between two
+  forwarding engines, including interfaces, data link(s), and to the extent
+  possible the forwarding engines themselves, with potentially very low
+  latency.
+
+  -- :rfc:`5880`
+
+It is described and extended by the following RFCs:
 
 * :rfc:`5880`
 * :rfc:`5881`
@@ -27,6 +34,8 @@ This document will focus on the later implementation: *bfdd*.
 Starting BFD
 ============
 
+.. include:: config-include.rst
+
 *bfdd* default configuration file is :file:`bfdd.conf`. *bfdd* searches
 the current directory first then |INSTALL_PREFIX_ETC|/bfdd.conf. All of
 *bfdd*'s command must be configured in :file:`bfdd.conf`.
@@ -35,21 +44,6 @@ the current directory first then |INSTALL_PREFIX_ETC|/bfdd.conf. All of
 may also be specified (:ref:`common-invocation-options`).
 
 .. program:: bfdd
-
-.. option:: --bfdctl <unix-socket>
-
-   Set the BFD daemon control socket location. If using a non-default
-   socket location::
-
-      /usr/lib/frr/bfdd --bfdctl /tmp/bfdd.sock
-
-
-   The default UNIX socket location is:
-
-      #define BFDD_CONTROL_SOCKET "|INSTALL_PREFIX_STATE|/bfdd.sock"
-
-   This option overrides the location addition that the -N option provides
-   to the bfdd.sock
 
 .. option:: --dplaneaddr <type>:<address>[<:port>]
 
@@ -224,12 +218,6 @@ BFD peers and profiles share the same BFD session configuration commands.
 
 BFD Peer Specific Commands
 --------------------------
-
-.. clicmd:: label WORD
-
-   Labels a peer with the provided word. This word can be referenced
-   later on other daemons to refer to a specific peer.
-
 
 .. clicmd:: profile BFDPROF
 
@@ -443,7 +431,6 @@ Here is an example of BFD configuration:
 
     bfd
      peer 192.168.0.1
-       label home-peer
        no shutdown
      !
     !
@@ -457,7 +444,7 @@ Here is an example of BFD configuration:
     !
 
 Peers can be identified by its address (use ``multihop`` when you need
-to specify a multi hop peer) or can be specified manually by a label.
+to specify a multi hop peer).
 
 Here are the available peer configurations:
 
@@ -500,7 +487,6 @@ Here are the available peer configurations:
 
     ! configure a peer with every option possible
     peer 192.168.0.4
-     label peer-label
      detect-multiplier 50
      receive-interval 60000
      transmit-interval 3000
@@ -548,7 +534,6 @@ You can inspect the current BFD peer status with the following commands:
                            Echo receive interval: 50ms
 
            peer 192.168.1.1
-                   label: router3-peer
                    ID: 2
                    Remote ID: 2
                    Status: up
@@ -571,7 +556,6 @@ You can inspect the current BFD peer status with the following commands:
    frr# show bfd peer 192.168.1.1
    BFD Peer:
                peer 192.168.1.1
-                   label: router3-peer
                    ID: 2
                    Remote ID: 2
                    Status: up

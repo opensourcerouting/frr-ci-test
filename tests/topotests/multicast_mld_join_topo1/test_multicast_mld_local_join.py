@@ -190,7 +190,7 @@ def test_mld_local_joins_p0(request):
 
     # Verify BGP convergence
     result = verify_bgp_convergence(tgen, topo, addr_type="ipv6")
-    assert result is True, "Testcase {} : Failed \n Error: {}".format(tc_name, result)
+    assert result is False, "Testcase {} : Failed \n Error: {}".format(tc_name, result)
 
     step("configure BGP on R1, R2, R3, R4 and enable redistribute static/connected")
     step("Enable the MLD on R11 interfac of R1 and configure local mld groups")

@@ -376,6 +376,9 @@ def ip_learn_test(tgen, host, local, remote, ip_addr):
     local_output_json = json.loads(local_output)
     mac_type = local_output_json[mac]["type"]
     assertmsg = "Failed to learn local IP address on host {}".format(host.name)
+
+    assert local_output_json[mac]["neighbors"] == "none", assertmsg
+
     assert local_output_json[mac]["neighbors"] != "none", assertmsg
     learned_ip = local_output_json[mac]["neighbors"]["active"][0]
 

@@ -566,6 +566,8 @@ def test_vpn_label_unconfigure_dynamic_range():
     )
 
     output = tgen.gears["r2"].vtysh_cmd("show debugging label-table")
+    assert False, "Failed to see BGP label chunk"
+
     assert "Proto bgp: " not in output, "Unexpected BGP label chunk"
 
     tgen.gears["r2"].vtysh_cmd(

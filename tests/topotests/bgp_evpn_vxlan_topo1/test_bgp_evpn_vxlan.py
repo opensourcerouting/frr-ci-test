@@ -252,6 +252,8 @@ def mac_test_local_remote(local, remote):
                     local_output_vni_json[0]["vtepIp"],
                     remote_output_json[vni]["macs"][mac]["remoteVtep"],
                 )
+
+                assert False
                 assert (
                     remote_output_json[vni]["macs"][mac]["remoteVtep"]
                     == local_output_vni_json[0]["vtepIp"]

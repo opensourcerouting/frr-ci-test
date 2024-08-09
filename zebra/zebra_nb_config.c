@@ -975,6 +975,45 @@ int lib_interface_zebra_ip_addrs_ip4_peer_modify(struct nb_cb_modify_args *args)
 	return NB_OK;
 }
 
+/* XPath: /frr-interface:lib/interface/frr-zebra:zebra/ipv4-addrs/setorder */
+int lib_interface_zebra_ipv4_addrs_setorder_modify(struct nb_cb_modify_args *args)
+{
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+		if (nb_running_get_entry_non_rec(lyd_parent(args->dnode), NULL,
+						 false)) {
+			snprintf(args->errmsg, args->errmsg_len,
+				 "Changing setorder is not allowed");
+			return NB_ERR_VALIDATION;
+		}
+		break;
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+	case NB_EV_APPLY:
+		break;
+	}
+
+	return NB_OK;
+}
+
+/* XPath: /frr-interface:lib/interface/frr-zebra:zebra/ipv4-addrs/setorder */
+int lib_interface_zebra_ipv4_addrs_setorder_destroy(
+	struct nb_cb_destroy_args *args)
+{
+	switch (args->event) {
+	case NB_EV_VALIDATE:
+		snprintf(args->errmsg, args->errmsg_len,
+			 "Removing setorder is not allowed");
+		return NB_ERR_VALIDATION;
+	case NB_EV_PREPARE:
+	case NB_EV_ABORT:
+	case NB_EV_APPLY:
+		break;
+	}
+
+	return NB_OK;
+}
+
 int lib_interface_zebra_ip_addrs_ip4_peer_destroy(
 	struct nb_cb_destroy_args *args)
 {
@@ -1403,8 +1442,9 @@ int lib_interface_zebra_affinity_mode_modify(struct nb_cb_modify_args *args)
 		if (affinity_mode == AFFINITY_MODE_STANDARD) {
 			if (!IS_PARAM_SET(iflp, LP_ADM_GRP) &&
 			    IS_PARAM_SET(iflp, LP_EXTEND_ADM_GRP)) {
-				iflp->admin_grp = admin_group_get_offset(
-					&iflp->ext_admin_grp, 0);
+				iflp->admin_grp =
+					admin_group_get_offset(&iflp->ext_admin_grp,
+							       0);
 				SET_PARAM(iflp, LP_ADM_GRP);
 			}
 			admin_group_clear(&iflp->ext_admin_grp);
@@ -1428,8 +1468,9 @@ int lib_interface_zebra_affinity_mode_modify(struct nb_cb_modify_args *args)
 				SET_PARAM(iflp, LP_EXTEND_ADM_GRP);
 			} else if (!IS_PARAM_SET(iflp, LP_ADM_GRP) &&
 				   IS_PARAM_SET(iflp, LP_EXTEND_ADM_GRP)) {
-				iflp->admin_grp = admin_group_get_offset(
-					&iflp->ext_admin_grp, 0);
+				iflp->admin_grp =
+					admin_group_get_offset(&iflp->ext_admin_grp,
+							       0);
 				SET_PARAM(iflp, LP_ADM_GRP);
 			}
 		}

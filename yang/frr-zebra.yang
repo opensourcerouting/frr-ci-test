@@ -1956,6 +1956,14 @@ module frr-zebra {
             "Optional string label for the address.";
         }
 
+        leaf setorder {
+          type uint8 {
+            range "1..100";
+          }
+          description
+            "The order of the IP address.";
+        }
+
         leaf ip4-peer {
           when "derived-from-or-self(../address-family, 'frr-rt:ipv4')";
           type inet:ipv4-prefix;

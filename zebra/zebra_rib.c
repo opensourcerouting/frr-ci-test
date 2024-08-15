@@ -1659,6 +1659,9 @@ static bool rib_update_nhg_from_ctx(struct nexthop_group *re_nhg,
 		if (!CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_ACTIVE))
 			continue;
 
+		if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_DUPLICATE))
+			continue;
+
 		/* Check for a FIB nexthop corresponding to the RIB nexthop */
 		if (!nexthop_same(ctx_nexthop, nexthop)) {
 			/* If the FIB doesn't know about the nexthop,
@@ -2693,8 +2696,7 @@ static void early_route_memory_free(struct zebra_early_route *ere)
 	if (ere->re_nhe)
 		zebra_nhg_free(ere->re_nhe);
 
-	zapi_re_opaque_free(ere->re->opaque);
-	XFREE(MTYPE_RE, ere->re);
+	zebra_rib_route_entry_free(ere->re);
 	XFREE(MTYPE_WQ_WRAPPER, ere);
 }
 
@@ -3159,6 +3161,7 @@ struct meta_q_gr_run {
 	vrf_id_t vrf_id;
 	uint8_t proto;
 	uint8_t instance;
+	time_t restart_time;
 };
 
 static void process_subq_gr_run(struct listnode *lnode)
@@ -3166,7 +3169,7 @@ static void process_subq_gr_run(struct listnode *lnode)
 	struct meta_q_gr_run *gr_run = listgetdata(lnode);
 
 	zebra_gr_process_client(gr_run->afi, gr_run->vrf_id, gr_run->proto,
-				gr_run->instance);
+				gr_run->instance, gr_run->restart_time);
 
 	XFREE(MTYPE_WQ_WRAPPER, gr_run);
 }
@@ -3833,13 +3836,18 @@ static void rib_meta_queue_free(struct meta_queue *mq, struct list *l,
 }
 
 static void early_route_meta_queue_free(struct meta_queue *mq, struct list *l,
-					struct zebra_vrf *zvrf)
+					const struct zebra_vrf *zvrf,
+					uint8_t proto, uint8_t instance)
 {
 	struct zebra_early_route *ere;
 	struct listnode *node, *nnode;
 
 	for (ALL_LIST_ELEMENTS(l, node, nnode, ere)) {
 		if (zvrf && ere->re->vrf_id != zvrf->vrf->vrf_id)
+			continue;
+
+		if (proto != ZEBRA_ROUTE_ALL &&
+		    (proto != ere->re->type && instance != ere->re->instance))
 			continue;
 
 		early_route_memory_free(ere);
@@ -3880,7 +3888,8 @@ void meta_queue_free(struct meta_queue *mq, struct zebra_vrf *zvrf)
 			evpn_meta_queue_free(mq, mq->subq[i], zvrf);
 			break;
 		case META_QUEUE_EARLY_ROUTE:
-			early_route_meta_queue_free(mq, mq->subq[i], zvrf);
+			early_route_meta_queue_free(mq, mq->subq[i], zvrf,
+						    ZEBRA_ROUTE_ALL, 0);
 			break;
 		case META_QUEUE_EARLY_LABEL:
 			early_label_meta_queue_free(mq, mq->subq[i], zvrf);
@@ -4060,9 +4069,7 @@ void rib_unlink(struct route_node *rn, struct route_entry *re)
 
 	rib_re_nhg_free(re);
 
-	zapi_re_opaque_free(re->opaque);
-
-	XFREE(MTYPE_RE, re);
+	zebra_rib_route_entry_free(re);
 }
 
 void rib_delnode(struct route_node *rn, struct route_entry *re)
@@ -4266,7 +4273,8 @@ static int rib_meta_queue_early_route_add(struct meta_queue *mq, void *data)
 	return 0;
 }
 
-int rib_add_gr_run(afi_t afi, vrf_id_t vrf_id, uint8_t proto, uint8_t instance)
+int rib_add_gr_run(afi_t afi, vrf_id_t vrf_id, uint8_t proto, uint8_t instance,
+		   time_t restart_time)
 {
 	struct meta_q_gr_run *gr_run;
 
@@ -4276,6 +4284,7 @@ int rib_add_gr_run(afi_t afi, vrf_id_t vrf_id, uint8_t proto, uint8_t instance)
 	gr_run->proto = proto;
 	gr_run->vrf_id = vrf_id;
 	gr_run->instance = instance;
+	gr_run->restart_time = restart_time;
 
 	return mq_add_handler(gr_run, rib_meta_queue_gr_run_add);
 }
@@ -4307,6 +4316,7 @@ struct route_entry *zebra_rib_route_entry_new(vrf_id_t vrf_id, int type,
 
 void zebra_rib_route_entry_free(struct route_entry *re)
 {
+	zapi_re_opaque_free(re);
 	XFREE(MTYPE_RE, re);
 }
 
@@ -4377,7 +4387,7 @@ int rib_add_multipath(afi_t afi, safi_t safi, struct prefix *p,
 
 	/* In error cases, free the route also */
 	if (ret < 0)
-		XFREE(MTYPE_RE, re);
+		zebra_rib_route_entry_free(re);
 
 	return ret;
 }
@@ -4694,6 +4704,10 @@ void rib_sweep_route(struct event *t)
 	struct vrf *vrf;
 	struct zebra_vrf *zvrf;
 
+	zrouter.rib_sweep_time = monotime(NULL);
+	/* TODO: Change to debug */
+	zlog_info("Sweeping the RIB for stale routes...");
+
 	RB_FOREACH (vrf, vrf_id_head, &vrfs_by_id) {
 		if ((zvrf = vrf->info) == NULL)
 			continue;
@@ -4741,6 +4755,10 @@ unsigned long rib_score_proto(uint8_t proto, unsigned short instance)
 		zvrf = vrf->info;
 		if (!zvrf)
 			continue;
+
+		early_route_meta_queue_free(zrouter.mq,
+					    zrouter.mq->subq[META_QUEUE_EARLY_ROUTE],
+					    zvrf, proto, instance);
 
 		cnt += rib_score_proto_table(proto, instance,
 					     zvrf->table[AFI_IP][SAFI_UNICAST])

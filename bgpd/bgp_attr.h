@@ -197,9 +197,6 @@ struct attr {
 #define ATTR_ES_L3_NHG_ACTIVE (1 << 6)
 #define ATTR_ES_L3_NHG	      (ATTR_ES_L3_NHG_USE | ATTR_ES_L3_NHG_ACTIVE)
 
-	/* NA router flag (R-bit) support in EVPN */
-	uint8_t router_flag;
-
 	/* Distance as applied by Route map */
 	uint8_t distance;
 
@@ -212,7 +209,7 @@ struct attr {
 
 	/* has the route-map changed any attribute?
 	   Used on the peer outbound side. */
-	uint32_t rmap_change_flags;
+	uint16_t rmap_change_flags;
 
 	/* Multi-Protocol Nexthop, AFI IPv6 */
 	struct in6_addr mp_nexthop_global;
@@ -256,11 +253,12 @@ struct attr {
 	/* MP Nexthop length */
 	uint8_t mp_nexthop_len;
 
-	/* Static MAC for EVPN */
-	uint8_t sticky;
-
-	/* Flag for default gateway extended community in EVPN */
-	uint8_t default_gw;
+	/* EVPN flags */
+	uint8_t evpn_flags;
+#define ATTR_EVPN_FLAG_STICKY	  (1 << 0)
+#define ATTR_EVPN_FLAG_DEFAULT_GW (1 << 1)
+/* NA router flag (R-bit) support in EVPN */
+#define ATTR_EVPN_FLAG_ROUTER (1 << 2)
 
 	/* route tag */
 	route_tag_t tag;
@@ -295,7 +293,7 @@ struct attr {
 	/* EVPN local router-mac */
 	struct ethaddr rmac;
 
-	uint16_t encap_tunneltype;
+	uint8_t encap_tunneltype;
 
 	/* rmap set table */
 	uint32_t rmap_table_id;

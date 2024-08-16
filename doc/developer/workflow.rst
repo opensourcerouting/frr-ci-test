@@ -1306,6 +1306,16 @@ MemorySanitizer
 
    to ``configure``.
 
+UndefinedSanitizer
+   Similar to AddressSanitizer, this tool provides runtime instrumentation for
+   detecting use of undefined behavior in C.  Testing your own code with this
+   tool before submission is encouraged.  You can enable it by passing::
+
+      --enable-undefined-sanitizer
+
+    to ``configure``.  If you run FRR with this you will probably also have
+    to set ``sudo sysctl vm.mmap_rnd_bits=28``
+
 All of the above tools are available in the Clang/LLVM toolchain since 3.4.
 AddressSanitizer and ThreadSanitizer are available in recent versions of GCC,
 but are no longer actively maintained. MemorySanitizer is not available in GCC.
@@ -1314,6 +1324,14 @@ but are no longer actively maintained. MemorySanitizer is not available in GCC.
 
    The different Sanitizers are mostly incompatible with each other.  Please
    refer to GCC/LLVM documentation for details.
+
+.. note::
+
+   The different sanitizers also require setting
+
+   sysctl vm.mmap_rnd_bits=28
+
+   in order to work properly.
 
 frr-format plugin
    This is a GCC plugin provided with FRR that does extended type checks for

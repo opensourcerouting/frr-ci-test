@@ -16263,7 +16263,6 @@ static int bgp_show_neighbor_vty(struct vty *vty, const char *name,
 			bgp_show_neighbor(vty, bgp, type, NULL, NULL, use_json,
 					  json);
 		}
-		json_object_free(json);
 	} else {
 		if (use_json)
 			vty_out(vty, "{}\n");

@@ -1073,17 +1073,13 @@ static int vty_show_prefix_list(struct vty *vty, afi_t afi, const char *name,
 	struct prefix_master *master;
 	int64_t seqnum = 0;
 	json_object *json = NULL;
-	json_object *json_proto = NULL;
 
 	master = prefix_master_get(afi, 0);
 	if (master == NULL)
 		return CMD_WARNING;
 
-	if (uj) {
+	if (uj)
 		json = json_object_new_object();
-		json_proto = json_object_new_object();
-		json_object_object_add(json, frr_protoname, json_proto);
-	}
 
 	if (seq)
 		seqnum = (int64_t)atol(seq);
@@ -1096,8 +1092,8 @@ static int vty_show_prefix_list(struct vty *vty, afi_t afi, const char *name,
 					"%% Can't find specified prefix-list\n");
 			return CMD_WARNING;
 		}
-		vty_show_prefix_entry(vty, json_proto, afi, plist, master,
-				      dtype, seqnum);
+		vty_show_prefix_entry(vty, json, afi, plist, master, dtype,
+				      seqnum);
 	} else {
 		if (dtype == detail_display || dtype == summary_display) {
 			if (master->recent && !uj)
@@ -1107,8 +1103,8 @@ static int vty_show_prefix_list(struct vty *vty, afi_t afi, const char *name,
 		}
 
 		frr_each (plist, &master->str, plist)
-			vty_show_prefix_entry(vty, json_proto, afi, plist,
-					      master, dtype, seqnum);
+			vty_show_prefix_entry(vty, json, afi, plist, master,
+					      dtype, seqnum);
 	}
 
 	return vty_json(vty, json);
@@ -1227,9 +1223,9 @@ static int vty_clear_prefix_list(struct vty *vty, afi_t afi, const char *name,
 
 #include "lib/plist_clippy.c"
 
-DEFPY (show_ip_prefix_list,
+DEFPY_NOSH (show_ip_prefix_list,
        show_ip_prefix_list_cmd,
-       "show ip prefix-list [WORD [seq$dseq (1-4294967295)$arg]] [json$uj]",
+       "show ip prefix-list [PREFIXLIST4_NAME$name [seq$dseq (1-4294967295)$arg]] [json$uj]",
        SHOW_STR
        IP_STR
        PREFIX_LIST_STR
@@ -1239,16 +1235,17 @@ DEFPY (show_ip_prefix_list,
        JSON_STR)
 {
 	enum display_type dtype = normal_display;
+
 	if (dseq)
 		dtype = sequential_display;
 
-	return vty_show_prefix_list(vty, AFI_IP, prefix_list, arg_str, dtype,
+	return vty_show_prefix_list(vty, AFI_IP, name, arg_str, dtype,
 				    !!uj);
 }
 
 DEFPY (show_ip_prefix_list_prefix,
        show_ip_prefix_list_prefix_cmd,
-       "show ip prefix-list WORD A.B.C.D/M$prefix [longer$dl|first-match$dfm]",
+       "show ip prefix-list PREFIXLIST4_NAME$name A.B.C.D/M$prefix [longer$dl|first-match$dfm]",
        SHOW_STR
        IP_STR
        PREFIX_LIST_STR
@@ -1258,18 +1255,19 @@ DEFPY (show_ip_prefix_list_prefix,
        "First matched prefix\n")
 {
 	enum display_type dtype = normal_display;
+
 	if (dl)
 		dtype = longer_display;
 	else if (dfm)
 		dtype = first_match_display;
 
-	return vty_show_prefix_list_prefix(vty, AFI_IP, prefix_list, prefix_str,
+	return vty_show_prefix_list_prefix(vty, AFI_IP, name, prefix_str,
 					   dtype);
 }
 
-DEFPY (show_ip_prefix_list_summary,
+DEFPY_NOSH (show_ip_prefix_list_summary,
        show_ip_prefix_list_summary_cmd,
-       "show ip prefix-list summary [WORD$prefix_list] [json$uj]",
+       "show ip prefix-list summary [PREFIXLIST4_NAME$name] [json$uj]",
        SHOW_STR
        IP_STR
        PREFIX_LIST_STR
@@ -1277,13 +1275,13 @@ DEFPY (show_ip_prefix_list_summary,
        "Name of a prefix list\n"
        JSON_STR)
 {
-	return vty_show_prefix_list(vty, AFI_IP, prefix_list, NULL,
+	return vty_show_prefix_list(vty, AFI_IP, name, NULL,
 				    summary_display, !!uj);
 }
 
-DEFPY (show_ip_prefix_list_detail,
+DEFPY_NOSH (show_ip_prefix_list_detail,
        show_ip_prefix_list_detail_cmd,
-       "show ip prefix-list detail [WORD$prefix_list] [json$uj]",
+       "show ip prefix-list detail [PREFIXLIST4_NAME$name] [json$uj]",
        SHOW_STR
        IP_STR
        PREFIX_LIST_STR
@@ -1291,25 +1289,25 @@ DEFPY (show_ip_prefix_list_detail,
        "Name of a prefix list\n"
        JSON_STR)
 {
-	return vty_show_prefix_list(vty, AFI_IP, prefix_list, NULL,
+	return vty_show_prefix_list(vty, AFI_IP, name, NULL,
 				    detail_display, !!uj);
 }
 
 DEFPY (clear_ip_prefix_list,
        clear_ip_prefix_list_cmd,
-       "clear ip prefix-list [WORD [A.B.C.D/M$prefix]]",
+       "clear ip prefix-list [PREFIXLIST4_NAME$name [A.B.C.D/M$prefix]]",
        CLEAR_STR
        IP_STR
        PREFIX_LIST_STR
        "Name of a prefix list\n"
        "IP prefix <network>/<length>, e.g., 35.0.0.0/8\n")
 {
-	return vty_clear_prefix_list(vty, AFI_IP, prefix_list, prefix_str);
+	return vty_clear_prefix_list(vty, AFI_IP, name, prefix_str);
 }
 
-DEFPY (show_ipv6_prefix_list,
+DEFPY_NOSH(show_ipv6_prefix_list,
        show_ipv6_prefix_list_cmd,
-       "show ipv6 prefix-list [WORD [seq$dseq (1-4294967295)$arg]] [json$uj]",
+       "show ipv6 prefix-list [PREFIXLIST6_NAME$name [seq$dseq (1-4294967295)$arg]] [json$uj]",
        SHOW_STR
        IPV6_STR
        PREFIX_LIST_STR
@@ -1319,16 +1317,17 @@ DEFPY (show_ipv6_prefix_list,
        JSON_STR)
 {
 	enum display_type dtype = normal_display;
+
 	if (dseq)
 		dtype = sequential_display;
 
-	return vty_show_prefix_list(vty, AFI_IP6, prefix_list, arg_str, dtype,
+	return vty_show_prefix_list(vty, AFI_IP6, name, arg_str, dtype,
 				    !!uj);
 }
 
 DEFPY (show_ipv6_prefix_list_prefix,
        show_ipv6_prefix_list_prefix_cmd,
-       "show ipv6 prefix-list WORD X:X::X:X/M$prefix [longer$dl|first-match$dfm]",
+       "show ipv6 prefix-list PREFIXLIST6_NAME$name X:X::X:X/M$prefix [longer$dl|first-match$dfm]",
        SHOW_STR
        IPV6_STR
        PREFIX_LIST_STR
@@ -1338,18 +1337,19 @@ DEFPY (show_ipv6_prefix_list_prefix,
        "First matched prefix\n")
 {
 	enum display_type dtype = normal_display;
+
 	if (dl)
 		dtype = longer_display;
 	else if (dfm)
 		dtype = first_match_display;
 
-	return vty_show_prefix_list_prefix(vty, AFI_IP6, prefix_list,
+	return vty_show_prefix_list_prefix(vty, AFI_IP6, name,
 					   prefix_str, dtype);
 }
 
-DEFPY (show_ipv6_prefix_list_summary,
+DEFPY_NOSH (show_ipv6_prefix_list_summary,
        show_ipv6_prefix_list_summary_cmd,
-       "show ipv6 prefix-list summary [WORD$prefix-list] [json$uj]",
+       "show ipv6 prefix-list summary [PREFIXLIST6_NAME$name] [json$uj]",
        SHOW_STR
        IPV6_STR
        PREFIX_LIST_STR
@@ -1357,13 +1357,13 @@ DEFPY (show_ipv6_prefix_list_summary,
        "Name of a prefix list\n"
        JSON_STR)
 {
-	return vty_show_prefix_list(vty, AFI_IP6, prefix_list, NULL,
+	return vty_show_prefix_list(vty, AFI_IP6, name, NULL,
 				    summary_display, !!uj);
 }
 
-DEFPY (show_ipv6_prefix_list_detail,
+DEFPY_NOSH (show_ipv6_prefix_list_detail,
        show_ipv6_prefix_list_detail_cmd,
-       "show ipv6 prefix-list detail [WORD$prefix-list] [json$uj]",
+       "show ipv6 prefix-list detail [PREFIXLIST6_NAME$name] [json$uj]",
        SHOW_STR
        IPV6_STR
        PREFIX_LIST_STR
@@ -1371,20 +1371,20 @@ DEFPY (show_ipv6_prefix_list_detail,
        "Name of a prefix list\n"
        JSON_STR)
 {
-	return vty_show_prefix_list(vty, AFI_IP6, prefix_list, NULL,
+	return vty_show_prefix_list(vty, AFI_IP6, name, NULL,
 				    detail_display, !!uj);
 }
 
 DEFPY (clear_ipv6_prefix_list,
        clear_ipv6_prefix_list_cmd,
-       "clear ipv6 prefix-list [WORD [X:X::X:X/M$prefix]]",
+       "clear ipv6 prefix-list [PREFIXLIST6_NAME$name [X:X::X:X/M$prefix]]",
        CLEAR_STR
        IPV6_STR
        PREFIX_LIST_STR
        "Name of a prefix list\n"
        "IPv6 prefix <network>/<length>, e.g., 3ffe::/16\n")
 {
-	return vty_clear_prefix_list(vty, AFI_IP6, prefix_list, prefix_str);
+	return vty_clear_prefix_list(vty, AFI_IP6, name, prefix_str);
 }
 
 DEFPY (debug_prefix_list_match,
@@ -1632,12 +1632,26 @@ static void plist_autocomplete(vector comps, struct cmd_token *token)
 	plist_autocomplete_afi(AFI_IP6, comps, token);
 }
 
+static void plist4_autocomplete(vector comps, struct cmd_token *token)
+{
+	plist_autocomplete_afi(AFI_IP, comps, token);
+}
+
+static void plist6_autocomplete(vector comps, struct cmd_token *token)
+{
+	plist_autocomplete_afi(AFI_IP6, comps, token);
+}
+
 static const struct cmd_variable_handler plist_var_handlers[] = {
 	{/* "prefix-list WORD" */
 	 .varname = "prefix_list",
 	 .completions = plist_autocomplete},
 	{.tokenname = "PREFIXLIST_NAME",
 	 .completions = plist_autocomplete},
+	{.tokenname = "PREFIXLIST4_NAME",
+	 .completions = plist4_autocomplete},
+	{.tokenname = "PREFIXLIST6_NAME",
+	 .completions = plist6_autocomplete},
 	{.completions = NULL}};
 
 

@@ -326,6 +326,33 @@ void vrf_disable(struct vrf *vrf)
 		(*vrf_master.vrf_disable_hook)(vrf);
 }
 
+void vrf_iterate(vrf_iter_func fnc)
+{
+	struct vrf *vrf, *tmp;
+
+	if (debug_vrf)
+		zlog_debug("%s:  vrf subsystem iteration", __func__);
+
+	RB_FOREACH_SAFE (vrf, vrf_id_head, &vrfs_by_id, tmp) {
+		if (vrf->vrf_id == VRF_DEFAULT)
+			continue;
+
+		fnc(vrf);
+	}
+
+	RB_FOREACH_SAFE (vrf, vrf_name_head, &vrfs_by_name, tmp) {
+		if (vrf->vrf_id == VRF_DEFAULT)
+			continue;
+
+		fnc(vrf);
+	}
+
+	/* Finally process default VRF */
+	vrf = vrf_lookup_by_id(VRF_DEFAULT);
+	if (vrf)
+		fnc(vrf);
+}
+
 const char *vrf_id_to_name(vrf_id_t vrf_id)
 {
 	struct vrf *vrf;
@@ -542,32 +569,12 @@ static void vrf_terminate_single(struct vrf *vrf)
 	vrf_delete(vrf);
 }
 
-/* Terminate VRF module. */
 void vrf_terminate(void)
 {
-	struct vrf *vrf, *tmp;
-
 	if (debug_vrf)
 		zlog_debug("%s: Shutting down vrf subsystem", __func__);
 
-	RB_FOREACH_SAFE (vrf, vrf_id_head, &vrfs_by_id, tmp) {
-		if (vrf->vrf_id == VRF_DEFAULT)
-			continue;
-
-		vrf_terminate_single(vrf);
-	}
-
-	RB_FOREACH_SAFE (vrf, vrf_name_head, &vrfs_by_name, tmp) {
-		if (vrf->vrf_id == VRF_DEFAULT)
-			continue;
-
-		vrf_terminate_single(vrf);
-	}
-
-	/* Finally terminate default VRF */
-	vrf = vrf_lookup_by_id(VRF_DEFAULT);
-	if (vrf)
-		vrf_terminate_single(vrf);
+	vrf_iterate(vrf_terminate_single);
 }
 
 int vrf_socket(int domain, int type, int protocol, vrf_id_t vrf_id,
@@ -629,7 +636,7 @@ int vrf_configure_backend(enum vrf_backend_type backend)
 }
 
 /* vrf CLI commands */
-DEFUN_NOSH(vrf_exit,
+DEFUN_YANG_NOSH (vrf_exit,
            vrf_exit_cmd,
 	   "exit-vrf",
 	   "Exit current mode and down to previous mode\n")
@@ -680,18 +687,6 @@ DEFUN_YANG (no_vrf,
 {
 	const char *vrfname = argv[2]->arg;
 	char xpath_list[XPATH_MAXLEN];
-
-	struct vrf *vrfp;
-
-	vrfp = vrf_lookup_by_name(vrfname);
-
-	if (vrfp == NULL)
-		return CMD_SUCCESS;
-
-	if (CHECK_FLAG(vrfp->status, VRF_ACTIVE)) {
-		vty_out(vty, "%% Only inactive VRFs can be deleted\n");
-		return CMD_WARNING_CONFIG_FAILED;
-	}
 
 	if (vrf_get_backend() == VRF_BACKEND_VRF_LITE) {
 		/*
@@ -956,6 +951,25 @@ static int lib_vrf_destroy(struct nb_cb_destroy_args *args)
 	return NB_OK;
 }
 
+static void lib_vrf_cli_write(struct vty *vty, const struct lyd_node *dnode,
+			      bool show_defaults)
+{
+	const char *name = yang_dnode_get_string(dnode, "name");
+
+	if (strcmp(name, VRF_DEFAULT_NAME)) {
+		vty_out(vty, "!\n");
+		vty_out(vty, "vrf %s\n", name);
+	}
+}
+
+static void lib_vrf_cli_write_end(struct vty *vty, const struct lyd_node *dnode)
+{
+	const char *name = yang_dnode_get_string(dnode, "name");
+
+	if (strcmp(name, VRF_DEFAULT_NAME))
+		vty_out(vty, "exit-vrf\n");
+}
+
 static const void *lib_vrf_get_next(struct nb_cb_get_next_args *args)
 {
 	struct vrf *vrfp = (struct vrf *)args->list_entry;
@@ -1027,6 +1041,8 @@ lib_vrf_state_active_get_elem(struct nb_cb_get_elem_args *args)
 }
 
 /* clang-format off */
+
+/* cli_show callbacks are kept here for daemons not yet converted to mgmtd */
 const struct frr_yang_module_info frr_vrf_info = {
 	.name = "frr-vrf",
 	.nodes = {
@@ -1035,6 +1051,8 @@ const struct frr_yang_module_info frr_vrf_info = {
 			.cbs = {
 				.create = lib_vrf_create,
 				.destroy = lib_vrf_destroy,
+				.cli_show = lib_vrf_cli_write,
+				.cli_show_end = lib_vrf_cli_write_end,
 				.get_next = lib_vrf_get_next,
 				.get_keys = lib_vrf_get_keys,
 				.lookup_entry = lib_vrf_lookup_entry,
@@ -1060,3 +1078,19 @@ const struct frr_yang_module_info frr_vrf_info = {
 	}
 };
 
+const struct frr_yang_module_info frr_vrf_cli_info = {
+	.name = "frr-vrf",
+	.ignore_cfg_cbs = true,
+	.nodes = {
+		{
+			.xpath = "/frr-vrf:lib/vrf",
+			.cbs = {
+				.cli_show = lib_vrf_cli_write,
+				.cli_show_end = lib_vrf_cli_write_end,
+			},
+		},
+		{
+			.xpath = NULL,
+		},
+	}
+};

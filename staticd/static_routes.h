@@ -199,19 +199,17 @@ extern uint32_t zebra_ecmp_count;
 
 extern struct zebra_privs_t static_privs;
 
-void static_fixup_vrf_ids(struct static_vrf *svrf);
+extern void static_fixup_vrf_ids(struct vrf *vrf);
+extern void static_cleanup_vrf_ids(struct vrf *vrf);
 
 extern struct static_nexthop *
 static_add_nexthop(struct static_path *pn, enum static_nh_type type,
 		   struct ipaddr *ipaddr, const char *ifname,
 		   const char *nh_vrf, uint32_t color);
 extern void static_install_nexthop(struct static_nexthop *nh);
+extern void static_uninstall_nexthop(struct static_nexthop *nh);
 
 extern void static_delete_nexthop(struct static_nexthop *nh);
-
-extern void static_cleanup_vrf_ids(struct static_vrf *disable_svrf);
-
-extern void static_install_intf_nh(struct interface *ifp);
 
 extern void static_ifindex_update(struct interface *ifp, bool up);
 

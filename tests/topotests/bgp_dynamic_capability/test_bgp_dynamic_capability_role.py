@@ -10,23 +10,20 @@ Test if role capability is exchanged dynamically.
 """
 
 import os
-import re
 import sys
 import json
 import pytest
 import functools
 
-pytestmark = pytest.mark.bgpd
+pytestmark = [pytest.mark.bgpd]
 
 CWD = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.join(CWD, "../"))
 
 # pylint: disable=C0413
 from lib import topotest
-from lib.topogen import Topogen, TopoRouter, get_topogen
+from lib.topogen import Topogen, get_topogen
 from lib.common_config import step
-
-pytestmark = [pytest.mark.bgpd]
 
 
 def setup_module(mod):
@@ -84,7 +81,7 @@ def test_bgp_dynamic_capability_role():
     step("Set local-role and check if it's exchanged dynamically")
 
     # Clear message stats to check if we receive a notification or not after we
-    # change the settings fo LLGR.
+    # change the role.
     r1.vtysh_cmd("clear bgp 192.168.1.2 message-stats")
     r1.vtysh_cmd(
         """
@@ -131,6 +128,41 @@ def test_bgp_dynamic_capability_role():
     )
     _, result = topotest.run_and_expect(test_func, None, count=30, wait=1)
     assert result is None, "Session was reset after setting role capability"
+
+    # Clear message stats to check if we receive a notification or not after we
+    # change the role.
+    r1.vtysh_cmd("clear bgp 192.168.1.2 message-stats")
+    r1.vtysh_cmd(
+        """
+    configure terminal
+    router bgp
+      no neighbor 192.168.1.2 local-role customer
+    """
+    )
+
+    def _bgp_check_if_role_capability_is_absent():
+        output = json.loads(r1.vtysh_cmd("show bgp neighbor json"))
+        expected = {
+            "192.168.1.2": {
+                "bgpState": "Established",
+                "localRole": "undefined",
+                "remoteRole": "provider",
+                "neighborCapabilities": {
+                    "dynamic": "advertisedAndReceived",
+                    "role": "received",
+                },
+                "messageStats": {
+                    "notificationsRecv": 0,
+                },
+            }
+        }
+        return topotest.json_cmp(output, expected)
+
+    test_func = functools.partial(
+        _bgp_check_if_role_capability_is_absent,
+    )
+    _, result = topotest.run_and_expect(test_func, None, count=30, wait=1)
+    assert result is None, "Failed to disable role capability"
 
 
 if __name__ == "__main__":

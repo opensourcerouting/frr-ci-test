@@ -99,6 +99,8 @@ static int nhrp_if_delete_hook(struct interface *ifp)
 		free(nifp->ipsec_fallback_profile);
 	if (nifp->source)
 		free(nifp->source);
+	if (nifp->auth_token)
+		zbuf_free(nifp->auth_token);
 
 	XFREE(MTYPE_NHRP_IF, ifp->info);
 	return 0;
@@ -351,6 +353,7 @@ void nhrp_interface_update(struct interface *ifp)
 		if (!if_ad->configured) {
 			os_configure_dmvpn(ifp->ifindex, ifp->name,
 					   afi2family(afi));
+			nhrp_interface_update_arp(ifp, true);
 			nhrp_send_zebra_configure_arp(ifp, afi2family(afi));
 			if_ad->configured = 1;
 			nhrp_interface_update_address(ifp, afi, 1);

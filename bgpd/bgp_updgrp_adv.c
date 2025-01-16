@@ -78,6 +78,8 @@ static inline struct bgp_adj_out *adj_lookup(struct bgp_dest *dest,
 
 static void adj_free(struct bgp_adj_out *adj)
 {
+	bgp_labels_unintern(&adj->labels);
+
 	TAILQ_REMOVE(&(adj->subgroup->adjq), adj, subgrp_adj_train);
 	SUBGRP_DECR_STAT(adj->subgroup, adj_count);
 
@@ -97,13 +99,19 @@ subgrp_announce_addpath_best_selected(struct bgp_dest *dest,
 	enum bgp_path_selection_reason reason;
 	char pfx_buf[PREFIX2STR_BUFFER] = {};
 	int paths_eq = 0;
-	int best_path_count = 0;
 	struct list *list = list_new();
 	struct bgp_path_info *pi = NULL;
+	uint16_t paths_count = 0;
+	uint16_t paths_limit = peer->addpath_paths_limit[afi][safi].receive;
 
 	if (peer->addpath_type[afi][safi] == BGP_ADDPATH_BEST_SELECTED) {
-		while (best_path_count++ <
-		       peer->addpath_best_selected[afi][safi]) {
+		paths_limit =
+			paths_limit
+				? MIN(paths_limit,
+				      peer->addpath_best_selected[afi][safi])
+				: peer->addpath_best_selected[afi][safi];
+
+		while (paths_count++ < paths_limit) {
 			struct bgp_path_info *exist = NULL;
 
 			for (pi = bgp_dest_get_bgp_path_info(dest); pi;
@@ -139,8 +147,26 @@ subgrp_announce_addpath_best_selected(struct bgp_dest *dest,
 				subgroup_process_announce_selected(
 					subgrp, NULL, dest, afi, safi, id);
 		} else {
-			subgroup_process_announce_selected(subgrp, pi, dest,
-							   afi, safi, id);
+			/* No Paths-Limit involved */
+			if (!paths_limit) {
+				subgroup_process_announce_selected(subgrp, pi,
+								   dest, afi,
+								   safi, id);
+				continue;
+			}
+
+			/* If we have Paths-Limit capability, we MUST
+			 * not send more than the number of paths expected
+			 * by the peer.
+			 */
+			if (paths_count++ < paths_limit)
+				subgroup_process_announce_selected(subgrp, pi,
+								   dest, afi,
+								   safi, id);
+			else
+				subgroup_process_announce_selected(subgrp, NULL,
+								   dest, afi,
+								   safi, id);
 		}
 	}
 
@@ -304,15 +330,16 @@ static void subgrp_show_adjq_vty(struct update_subgroup *subgrp,
 			}
 			if ((flags & UPDWALK_FLAGS_ADVQUEUE) && adj->adv &&
 			    adj->adv->baa) {
-				route_vty_out_tmp(
-					vty, dest, dest_p, adj->adv->baa->attr,
-					SUBGRP_SAFI(subgrp), 0, NULL, false);
+				route_vty_out_tmp(vty, bgp, dest, dest_p,
+						  adj->adv->baa->attr,
+						  SUBGRP_SAFI(subgrp), 0, NULL,
+						  false);
 				output_count++;
 			}
 			if ((flags & UPDWALK_FLAGS_ADVERTISED) && adj->attr) {
-				route_vty_out_tmp(vty, dest, dest_p, adj->attr,
-						  SUBGRP_SAFI(subgrp), 0, NULL,
-						  false);
+				route_vty_out_tmp(vty, bgp, dest, dest_p,
+						  adj->attr, SUBGRP_SAFI(subgrp),
+						  0, NULL, false);
 				output_count++;
 			}
 		}
@@ -496,7 +523,7 @@ bgp_advertise_clean_subgroup(struct update_subgroup *subgrp,
 	return next;
 }
 
-void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
+bool bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 			      struct update_subgroup *subgrp, struct attr *attr,
 			      struct bgp_path_info *path)
 {
@@ -508,7 +535,7 @@ void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 	struct peer *adv_peer;
 	struct peer_af *paf;
 	struct bgp *bgp;
-	uint32_t attr_hash = attrhash_key_make(attr);
+	uint32_t attr_hash = 0;
 
 	peer = SUBGRP_PEER(subgrp);
 	afi = SUBGRP_AFI(subgrp);
@@ -516,7 +543,7 @@ void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 	bgp = SUBGRP_INST(subgrp);
 
 	if (DISABLE_BGP_ANNOUNCE)
-		return;
+		return false;
 
 	/* Look for adjacency information. */
 	adj = adj_lookup(
@@ -532,7 +559,7 @@ void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 			bgp_addpath_id_for_peer(peer, afi, safi,
 						&path->tx_addpath));
 		if (!adj)
-			return;
+			return false;
 
 		subgrp->pscount++;
 	}
@@ -543,9 +570,13 @@ void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 	 * the route wasn't changed actually.
 	 * Do not suppress BGP UPDATES for route-refresh.
 	 */
-	if (CHECK_FLAG(bgp->flags, BGP_FLAG_SUPPRESS_DUPLICATES)
-	    && !CHECK_FLAG(subgrp->sflags, SUBGRP_STATUS_FORCE_UPDATES)
-	    && adj->attr_hash == attr_hash) {
+	if (likely(CHECK_FLAG(bgp->flags, BGP_FLAG_SUPPRESS_DUPLICATES)))
+		attr_hash = attrhash_key_make(attr);
+
+	if (!CHECK_FLAG(subgrp->sflags, SUBGRP_STATUS_FORCE_UPDATES) &&
+	    attr_hash && adj->attr_hash == attr_hash &&
+	    bgp_labels_cmp(path->extra ? path->extra->labels : NULL,
+			   adj->labels)) {
 		if (BGP_DEBUG(update, UPDATE_OUT)) {
 			char attr_str[BUFSIZ] = {0};
 
@@ -571,7 +602,7 @@ void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 		 * will never be able to coalesce the 3rd peer down
 		 */
 		subgrp->version = MAX(subgrp->version, dest->version);
-		return;
+		return false;
 	}
 
 	if (adj->adv)
@@ -587,6 +618,10 @@ void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 	adv->baa = bgp_advertise_attr_intern(subgrp->hash, attr);
 	adv->adj = adj;
 	adj->attr_hash = attr_hash;
+	if (path->extra)
+		adj->labels = bgp_labels_intern(path->extra->labels);
+	else
+		adj->labels = NULL;
 
 	/* Add new advertisement to advertisement attribute list. */
 	bgp_advertise_add(adv->baa, adv);
@@ -619,6 +654,8 @@ void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 	bgp_adv_fifo_add_tail(&subgrp->sync->update, adv);
 
 	subgrp->version = MAX(subgrp->version, dest->version);
+
+	return true;
 }
 
 /* The only time 'withdraw' will be false is if we are sending
@@ -828,8 +865,9 @@ void subgroup_announce_route(struct update_subgroup *subgrp)
 void subgroup_default_originate(struct update_subgroup *subgrp, bool withdraw)
 {
 	struct bgp *bgp;
-	struct attr attr;
+	struct attr attr = { 0 };
 	struct attr *new_attr = &attr;
+	struct aspath *aspath;
 	struct prefix p;
 	struct peer *from;
 	struct bgp_dest *dest;
@@ -867,6 +905,7 @@ void subgroup_default_originate(struct update_subgroup *subgrp, bool withdraw)
 	/* make coverity happy */
 	assert(attr.aspath);
 
+	aspath = attr.aspath;
 	attr.med = 0;
 	attr.flag |= ATTR_FLAG_BIT(BGP_ATTR_MULTI_EXIT_DISC);
 
@@ -967,18 +1006,19 @@ void subgroup_default_originate(struct update_subgroup *subgrp, bool withdraw)
 		if (dest) {
 			for (pi = bgp_dest_get_bgp_path_info(dest); pi;
 			     pi = pi->next) {
-				if (CHECK_FLAG(pi->flags, BGP_PATH_SELECTED))
-					if (subgroup_announce_check(
-						    dest, pi, subgrp,
-						    bgp_dest_get_prefix(dest),
-						    &attr, NULL)) {
-						struct attr *default_attr =
-							bgp_attr_intern(&attr);
+				if (!CHECK_FLAG(pi->flags, BGP_PATH_SELECTED))
+					continue;
 
-						bgp_adj_out_set_subgroup(
-							dest, subgrp,
-							default_attr, pi);
-					}
+				if (subgroup_announce_check(dest, pi, subgrp,
+							    bgp_dest_get_prefix(
+								    dest),
+							    &attr, NULL)) {
+					if (!bgp_adj_out_set_subgroup(dest,
+								      subgrp,
+								      &attr, pi))
+						bgp_attr_flush(&attr);
+				} else
+					bgp_attr_flush(&attr);
 			}
 			bgp_dest_unlock_node(dest);
 		}
@@ -1022,7 +1062,7 @@ void subgroup_default_originate(struct update_subgroup *subgrp, bool withdraw)
 		}
 	}
 
-	aspath_unintern(&attr.aspath);
+	aspath_unintern(&aspath);
 }
 
 /*

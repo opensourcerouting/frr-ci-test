@@ -17,7 +17,7 @@
 
 #define MGMTD_BE_CONN_INIT_DELAY_MSEC 50
 
-#define MGMTD_FIND_ADAPTER_BY_INDEX(adapter_index)                             \
+#define MGMTD_FIND_ADAPTER_BY_INDEX(adapter_index)	\
 	mgmt_adaptr_ref[adapter_index]
 
 /**
@@ -27,10 +27,17 @@
  * #ifdef HAVE_COMPONENT
  */
 enum mgmt_be_client_id {
+	MGMTD_BE_CLIENT_ID_TESTC, /* always first */
+	MGMTD_BE_CLIENT_ID_ZEBRA,
+#ifdef HAVE_RIPD
+	MGMTD_BE_CLIENT_ID_RIPD,
+#endif
+#ifdef HAVE_RIPNGD
+	MGMTD_BE_CLIENT_ID_RIPNGD,
+#endif
 #ifdef HAVE_STATICD
 	MGMTD_BE_CLIENT_ID_STATICD,
 #endif
-	MGMTD_BE_CLIENT_ID_ZEBRA,
 	MGMTD_BE_CLIENT_ID_MAX
 };
 #define MGMTD_BE_CLIENT_ID_MIN	0
@@ -157,8 +164,8 @@ extern const char *mgmt_be_client_id2name(enum mgmt_be_client_id id);
 extern void mgmt_be_adapter_toggle_client_debug(bool set);
 
 /* Fetch backend adapter config. */
-extern int mgmt_be_get_adapter_config(struct mgmt_be_client_adapter *adapter,
-				      struct nb_config_cbs **cfg_chgs);
+extern void mgmt_be_get_adapter_config(struct mgmt_be_client_adapter *adapter,
+				       struct nb_config_cbs **changes);
 
 /* Create/destroy a transaction. */
 extern int mgmt_be_send_txn_req(struct mgmt_be_client_adapter *adapter,
@@ -228,16 +235,31 @@ extern void mgmt_be_xpath_register_write(struct vty *vty);
  */
 extern int mgmt_be_send_native(enum mgmt_be_client_id id, void *msg);
 
+enum mgmt_be_xpath_subscr_type {
+	MGMT_BE_XPATH_SUBSCR_TYPE_CFG,
+	MGMT_BE_XPATH_SUBSCR_TYPE_OPER,
+	MGMT_BE_XPATH_SUBSCR_TYPE_NOTIF,
+	MGMT_BE_XPATH_SUBSCR_TYPE_RPC,
+};
+
 /**
  * Lookup the clients which are subscribed to a given `xpath`
  * and the way they are subscribed.
  *
  * Args:
  *     xpath - the xpath to check for subscription information.
- *     config - true for config interest false for oper interest.
+ *     type - type of subscription to check for.
  */
-extern uint64_t mgmt_be_interested_clients(const char *xpath, bool config);
+extern uint64_t mgmt_be_interested_clients(const char *xpath,
+					   enum mgmt_be_xpath_subscr_type type);
 
+/**
+ * mgmt_fe_adapter_send_notify() - notify FE clients of a notification.
+ * @msg: the notify message from the backend client.
+ * @msglen: the length of the notify message.
+ */
+extern void mgmt_fe_adapter_send_notify(struct mgmt_msg_notify_data *msg,
+					size_t msglen);
 /*
  * Dump backend client information for a given xpath to vty.
  */

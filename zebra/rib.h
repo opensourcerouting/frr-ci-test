@@ -85,24 +85,11 @@ struct route_entry {
 	 */
 	struct nhg_hash_entry *nhe;
 
-	/* Nexthop group from FIB (optional), reflecting what is actually
-	 * installed in the FIB if that differs. The 'backup' group is used
-	 * when backup nexthops are present in the route's nhg.
-	 */
-	struct nexthop_group fib_ng;
-	struct nexthop_group fib_backup_ng;
-
 	/* Nexthop group hash entry IDs. The "installed" id is the id
 	 * used in linux/netlink, if available.
 	 */
 	uint32_t nhe_id;
 	uint32_t nhe_installed_id;
-
-	/* Tag */
-	route_tag_t tag;
-
-	/* Uptime. */
-	time_t uptime;
 
 	/* Type of this route. */
 	int type;
@@ -160,7 +147,20 @@ struct route_entry {
 	/* Distance. */
 	uint8_t distance;
 
+	/* Tag */
+	route_tag_t tag;
+
+	/* Uptime. */
+	time_t uptime;
+
 	struct re_opaque *opaque;
+
+	/* Nexthop group from FIB (optional), reflecting what is actually
+	 * installed in the FIB if that differs. The 'backup' group is used
+	 * when backup nexthops are present in the route's nhg.
+	 */
+	struct nexthop_group fib_ng;
+	struct nexthop_group fib_backup_ng;
 };
 
 #define RIB_SYSTEM_ROUTE(R) RSYSTEM_ROUTE((R)->type)
@@ -622,10 +622,10 @@ static inline struct nexthop_group *rib_get_fib_backup_nhg(
 }
 
 extern void zebra_gr_process_client(afi_t afi, vrf_id_t vrf_id, uint8_t proto,
-				    uint8_t instance);
+				    uint8_t instance, time_t restart_time);
 
 extern int rib_add_gr_run(afi_t afi, vrf_id_t vrf_id, uint8_t proto,
-			  uint8_t instance);
+			  uint8_t instance, time_t restart_time);
 
 extern void zebra_vty_init(void);
 

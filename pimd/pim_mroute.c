@@ -56,10 +56,14 @@ int pim_mroute_set(struct pim_instance *pim, int enable)
 			err = setsockopt(pim->mroute_socket, PIM_IPPROTO,
 					 MRT_TABLE, &data, data_len);
 			if (err) {
-				zlog_warn(
-					"%s %s: failure: setsockopt(fd=%d,PIM_IPPROTO, MRT_TABLE=%d): errno=%d: %s",
-					__FILE__, __func__, pim->mroute_socket,
-					data, errno, safe_strerror(errno));
+				if (err == ENOPROTOOPT)
+					zlog_err("%s Kernel is not compiled with CONFIG_IP_MROUTE_MULTIPLE_TABLES and vrf's will not work",
+						 __func__);
+				else
+					zlog_warn("%s %s: failure: setsockopt(fd=%d,PIM_IPPROTO, MRT_TABLE=%d): errno=%d: %s",
+						  __FILE__, __func__,
+						  pim->mroute_socket, data,
+						  errno, safe_strerror(errno));
 				return -1;
 			}
 		}
@@ -1219,7 +1223,7 @@ int pim_upstream_mroute_add(struct channel_oil *c_oil, const char *name)
 	return pim_upstream_mroute_update(c_oil, name);
 }
 
-/* Look for IIF changes and update the dateplane entry only if the IIF
+/* Look for IIF changes and update the dataplane entry only if the IIF
  * has changed.
  */
 int pim_upstream_mroute_iif_update(struct channel_oil *c_oil, const char *name)

@@ -195,7 +195,7 @@ struct if_link_params {
 	uint32_t min_delay;		/* Link Min Delay */
 	uint32_t max_delay;		/* Link Max Delay */
 	uint32_t delay_var;		/* Link Delay Variation */
-	float pkt_loss;			/* Link Packet Loss */
+	uint32_t pkt_loss;		/* Link Packet Loss */
 	float res_bw;			/* Residual Bandwidth */
 	float ava_bw;			/* Available Bandwidth */
 	float use_bw;			/* Utilized Bandwidth */
@@ -636,6 +636,7 @@ extern void if_down_via_zapi(struct interface *ifp);
 extern void if_destroy_via_zapi(struct interface *ifp);
 
 extern const struct frr_yang_module_info frr_interface_info;
+extern const struct frr_yang_module_info frr_interface_cli_info;
 
 #ifdef __cplusplus
 }

@@ -8,10 +8,14 @@
 
 #include <zebra.h>
 
+#include "affinitymap.h"
 #include "command.h"
+#include "filter.h"
 #include "json.h"
+#include "keychain.h"
 #include "network.h"
 #include "northbound_cli.h"
+#include "routemap.h"
 
 #include "mgmtd/mgmt.h"
 #include "mgmtd/mgmt_be_adapter.h"
@@ -20,6 +24,10 @@
 #include "mgmtd/mgmt_history.h"
 
 #include "mgmtd/mgmt_vty_clippy.c"
+#include "ripd/rip_nb.h"
+#include "ripngd/ripng_nb.h"
+#include "staticd/static_vty.h"
+#include "zebra/zebra_cli.h"
 
 extern struct frr_daemon_info *mgmt_daemon_info;
 
@@ -230,6 +238,79 @@ DEFPY(mgmt_replace_config_data, mgmt_replace_config_data_cmd,
 	return CMD_SUCCESS;
 }
 
+DEFPY(mgmt_edit, mgmt_edit_cmd,
+      "mgmt edit {create|delete|merge|replace|remove}$op XPATH [json|xml]$fmt [lock$lock] [commit$commit] [DATA]",
+      MGMTD_STR
+      "Edit configuration data\n"
+      "Create data\n"
+      "Delete data\n"
+      "Merge data\n"
+      "Replace data\n"
+      "Remove data\n"
+      "XPath expression specifying the YANG data path\n"
+      "JSON input format (default)\n"
+      "XML input format\n"
+      "Lock the datastores automatically\n"
+      "Commit the changes automatically\n"
+      "Data tree\n")
+{
+	LYD_FORMAT format = (fmt && fmt[0] == 'x') ? LYD_XML : LYD_JSON;
+	uint8_t operation;
+	uint8_t flags = 0;
+
+	switch (op[2]) {
+	case 'e':
+		operation = NB_OP_CREATE_EXCL;
+		break;
+	case 'l':
+		operation = NB_OP_DELETE;
+		break;
+	case 'r':
+		operation = NB_OP_MODIFY;
+		break;
+	case 'p':
+		operation = NB_OP_REPLACE;
+		break;
+	case 'm':
+		operation = NB_OP_DESTROY;
+		break;
+	default:
+		vty_out(vty, "Invalid operation!\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	if (!data && (operation == NB_OP_CREATE_EXCL ||
+		      operation == NB_OP_MODIFY || operation == NB_OP_REPLACE)) {
+		vty_out(vty, "Data tree is missing!\n");
+		return CMD_WARNING_CONFIG_FAILED;
+	}
+
+	if (lock)
+		flags |= EDIT_FLAG_IMPLICIT_LOCK;
+
+	if (commit)
+		flags |= EDIT_FLAG_IMPLICIT_COMMIT;
+
+	vty_mgmt_send_edit_req(vty, MGMT_MSG_DATASTORE_CANDIDATE, format, flags,
+			       operation, xpath, data);
+	return CMD_SUCCESS;
+}
+
+DEFPY(mgmt_rpc, mgmt_rpc_cmd,
+      "mgmt rpc XPATH [json|xml]$fmt [DATA]",
+      MGMTD_STR
+      "Invoke RPC\n"
+      "XPath expression specifying the YANG data path\n"
+      "JSON input format (default)\n"
+      "XML input format\n"
+      "Input data tree\n")
+{
+	LYD_FORMAT format = (fmt && fmt[0] == 'x') ? LYD_XML : LYD_JSON;
+
+	vty_mgmt_send_rpc_req(vty, format, xpath, data);
+	return CMD_SUCCESS;
+}
+
 DEFPY(show_mgmt_get_config, show_mgmt_get_config_cmd,
       "show mgmt get-config [candidate|operational|running]$dsname WORD$path",
       SHOW_STR MGMTD_STR
@@ -251,14 +332,22 @@ DEFPY(show_mgmt_get_config, show_mgmt_get_config_cmd,
 }
 
 DEFPY(show_mgmt_get_data, show_mgmt_get_data_cmd,
-      "show mgmt get-data WORD$path [with-config|only-config]$content [exact]$exact [json|xml]$fmt",
+      "show mgmt get-data WORD$path [datastore <candidate|running|operational>$ds] [with-config|only-config]$content [exact]$exact [with-defaults <trim|all-tag|all>$wd] [json|xml]$fmt",
       SHOW_STR
       MGMTD_STR
       "Get a data from the operational datastore\n"
       "XPath expression specifying the YANG data root\n"
+      "Specify datastore to get data from (operational by default)\n"
+      "Candidate datastore\n"
+      "Running datastore\n"
+      "Operational datastore\n"
       "Include \"config true\" data\n"
       "Get only \"config true\" data\n"
       "Get exact node instead of the whole data tree\n"
+      "Configure 'with-defaults' mode per RFC 6243 (\"explicit\" mode by default)\n"
+      "Use \"trim\" mode\n"
+      "Use \"report-all-tagged\" mode\n"
+      "Use \"report-all\" mode\n"
       "JSON output format\n"
       "XML output format\n")
 {
@@ -266,12 +355,30 @@ DEFPY(show_mgmt_get_data, show_mgmt_get_data_cmd,
 	int plen = strlen(path);
 	char *xpath = NULL;
 	uint8_t flags = content ? GET_DATA_FLAG_CONFIG : GET_DATA_FLAG_STATE;
+	uint8_t defaults = GET_DATA_DEFAULTS_EXPLICIT;
+	uint8_t datastore = MGMT_MSG_DATASTORE_OPERATIONAL;
 
 	if (content && content[0] == 'w')
 		flags |= GET_DATA_FLAG_STATE;
 
 	if (exact)
 		flags |= GET_DATA_FLAG_EXACT;
+
+	if (wd) {
+		if (wd[0] == 't')
+			defaults = GET_DATA_DEFAULTS_TRIM;
+		else if (wd[3] == '-')
+			defaults = GET_DATA_DEFAULTS_ALL_ADD_TAG;
+		else
+			defaults = GET_DATA_DEFAULTS_ALL;
+	}
+
+	if (ds) {
+		if (ds[0] == 'c')
+			datastore = MGMT_MSG_DATASTORE_CANDIDATE;
+		else if (ds[0] == 'r')
+			datastore = MGMT_MSG_DATASTORE_RUNNING;
+	}
 
 	/* get rid of extraneous trailing slash-* or single '/' unless root */
 	if (plen > 2 && ((path[plen - 2] == '/' && path[plen - 1] == '*') ||
@@ -282,7 +389,8 @@ DEFPY(show_mgmt_get_data, show_mgmt_get_data_cmd,
 		path = xpath;
 	}
 
-	vty_mgmt_send_get_data_req(vty, format, flags, path);
+	vty_mgmt_send_get_data_req(vty, datastore, format, flags, defaults,
+				   path);
 
 	if (xpath)
 		XFREE(MTYPE_TMP, xpath);
@@ -561,13 +669,27 @@ static struct cmd_node mgmtd_node = {
 void mgmt_vty_init(void)
 {
 	/*
+	 * Library based CLI handlers
+	 */
+	filter_cli_init();
+	route_map_cli_init();
+	affinity_map_init();
+	keychain_cli_init();
+
+	/*
 	 * Initialize command handling from VTYSH connection.
 	 * Call command initialization routines defined by
 	 * backend components that are moved to new MGMTD infra
 	 * here one by one.
 	 */
-#if HAVE_STATICD
-	extern void static_vty_init(void);
+	zebra_cli_init();
+#ifdef HAVE_RIPD
+	rip_cli_init();
+#endif
+#ifdef HAVE_RIPNGD
+	ripng_cli_init();
+#endif
+#ifdef HAVE_STATICD
 	static_vty_init();
 #endif
 
@@ -594,6 +716,8 @@ void mgmt_vty_init(void)
 	install_element(CONFIG_NODE, &mgmt_delete_config_data_cmd);
 	install_element(CONFIG_NODE, &mgmt_remove_config_data_cmd);
 	install_element(CONFIG_NODE, &mgmt_replace_config_data_cmd);
+	install_element(CONFIG_NODE, &mgmt_edit_cmd);
+	install_element(CONFIG_NODE, &mgmt_rpc_cmd);
 	install_element(CONFIG_NODE, &mgmt_load_config_cmd);
 	install_element(CONFIG_NODE, &mgmt_save_config_cmd);
 	install_element(CONFIG_NODE, &mgmt_rollback_cmd);

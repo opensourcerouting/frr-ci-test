@@ -366,20 +366,19 @@ void del_vnc_route(struct rfapi_descriptor *rfd,
 
 	for (bpi = (bn ? bgp_dest_get_bgp_path_info(bn) : NULL); bpi;
 	     bpi = bpi->next) {
-
 		vnc_zlog_debug_verbose(
 			"%s: trying bpi=%p, bpi->peer=%p, bpi->type=%d, bpi->sub_type=%d, bpi->extra->vnc.export.rfapi_handle=%p, local_pref=%" PRIu64,
 			__func__, bpi, bpi->peer, bpi->type, bpi->sub_type,
-			(bpi->extra ? bpi->extra->vnc.export.rfapi_handle
+			(bpi->extra ? bpi->extra->vnc->vnc.export.rfapi_handle
 				    : NULL),
 			CHECK_FLAG(bpi->attr->flag,
 				   ATTR_FLAG_BIT(BGP_ATTR_LOCAL_PREF)
-				   ? bpi->attr->local_pref : 0));
+					   ? bpi->attr->local_pref
+					   : 0));
 
-		if (bpi->peer == peer && bpi->type == type
-		    && bpi->sub_type == sub_type && bpi->extra
-		    && bpi->extra->vnc.export.rfapi_handle == (void *)rfd) {
-
+		if (bpi->peer == peer && bpi->type == type &&
+		    bpi->sub_type == sub_type && bpi->extra &&
+		    bpi->extra->vnc->vnc.export.rfapi_handle == (void *)rfd) {
 			vnc_zlog_debug_verbose("%s: matched it", __func__);
 
 			break;
@@ -392,8 +391,8 @@ void del_vnc_route(struct rfapi_descriptor *rfd,
 		 * route. Leave the route itself in place.
 		 * TBD add return code reporting of success/failure
 		 */
-		if (!bpi || !bpi->extra
-		    || !bpi->extra->vnc.export.local_nexthops) {
+		if (!bpi || !bpi->extra ||
+		    !bpi->extra->vnc->vnc.export.local_nexthops) {
 			/*
 			 * no local nexthops
 			 */
@@ -409,16 +408,16 @@ void del_vnc_route(struct rfapi_descriptor *rfd,
 		struct listnode *node;
 		struct rfapi_nexthop *pLnh = NULL;
 
-		for (ALL_LIST_ELEMENTS_RO(bpi->extra->vnc.export.local_nexthops,
+		for (ALL_LIST_ELEMENTS_RO(bpi->extra->vnc->vnc.export
+						  .local_nexthops,
 					  node, pLnh)) {
-
 			if (prefix_same(&pLnh->addr, &lnh->addr)) {
 				break;
 			}
 		}
 
 		if (pLnh) {
-			listnode_delete(bpi->extra->vnc.export.local_nexthops,
+			listnode_delete(bpi->extra->vnc->vnc.export.local_nexthops,
 					pLnh);
 
 			/* silly rabbit, listnode_delete doesn't invoke
@@ -459,12 +458,12 @@ void del_vnc_route(struct rfapi_descriptor *rfd,
 		/*
 		 * Delete local_nexthops list
 		 */
-		if (bpi->extra && bpi->extra->vnc.export.local_nexthops)
-			list_delete(&bpi->extra->vnc.export.local_nexthops);
+		if (bpi->extra && bpi->extra->vnc->vnc.export.local_nexthops)
+			list_delete(&bpi->extra->vnc->vnc.export.local_nexthops);
 
 		bgp_aggregate_decrement(bgp, p, bpi, afi, safi);
 		bgp_path_info_delete(bn, bpi);
-		bgp_process(bgp, bn, afi, safi);
+		bgp_process(bgp, bn, bpi, afi, safi);
 	} else {
 		vnc_zlog_debug_verbose(
 			"%s: Couldn't find route (safi=%d) at prefix %pFX",
@@ -550,6 +549,7 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 		   int flags)
 {
 	afi_t afi; /* of the VN address */
+	struct bgp_labels bgp_labels = {};
 	struct bgp_path_info *new;
 	struct bgp_path_info *bpi;
 	struct bgp_dest *bn;
@@ -593,7 +593,7 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 		}
 	}
 
-	if (label)
+	if (label && *label != MPLS_INVALID_LABEL)
 		label_val = *label;
 	else
 		label_val = MPLS_LABEL_IMPLICIT_NULL;
@@ -902,11 +902,10 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 	 */
 	for (bpi = bgp_dest_get_bgp_path_info(bn); bpi; bpi = bpi->next) {
 		/* probably only need to check
-		 * bpi->extra->vnc.export.rfapi_handle */
-		if (bpi->peer == rfd->peer && bpi->type == type
-		    && bpi->sub_type == sub_type && bpi->extra
-		    && bpi->extra->vnc.export.rfapi_handle == (void *)rfd) {
-
+		 * bpi->extra->vnc->vnc.export.rfapi_handle */
+		if (bpi->peer == rfd->peer && bpi->type == type &&
+		    bpi->sub_type == sub_type && bpi->extra &&
+		    bpi->extra->vnc->vnc.export.rfapi_handle == (void *)rfd) {
 			break;
 		}
 	}
@@ -918,11 +917,11 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 		 * what is advertised via BGP
 		 */
 		if (lnh) {
-			if (!bpi->extra->vnc.export.local_nexthops) {
+			if (!bpi->extra->vnc->vnc.export.local_nexthops) {
 				/* TBD make arrangements to free when needed */
-				bpi->extra->vnc.export.local_nexthops =
+				bpi->extra->vnc->vnc.export.local_nexthops =
 					list_new();
-				bpi->extra->vnc.export.local_nexthops->del =
+				bpi->extra->vnc->vnc.export.local_nexthops->del =
 					rfapi_nexthop_free;
 			}
 
@@ -932,10 +931,9 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 			struct listnode *node;
 			struct rfapi_nexthop *pLnh = NULL;
 
-			for (ALL_LIST_ELEMENTS_RO(
-				     bpi->extra->vnc.export.local_nexthops,
-				     node, pLnh)) {
-
+			for (ALL_LIST_ELEMENTS_RO(bpi->extra->vnc->vnc.export
+							  .local_nexthops,
+						  node, pLnh)) {
 				if (prefix_same(&pLnh->addr, &lnh->addr)) {
 					break;
 				}
@@ -946,9 +944,9 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 			 */
 			if (!pLnh) {
 				pLnh = rfapi_nexthop_new(lnh);
-				listnode_add(
-					bpi->extra->vnc.export.local_nexthops,
-					pLnh);
+				listnode_add(bpi->extra->vnc->vnc.export
+						     .local_nexthops,
+					     pLnh);
 			}
 		}
 
@@ -1004,7 +1002,7 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 
 			/* Process change. */
 			bgp_aggregate_increment(bgp, p, bpi, afi, safi);
-			bgp_process(bgp, bn, afi, safi);
+			bgp_process(bgp, bn, bpi, afi, safi);
 			bgp_dest_unlock_node(bn);
 
 			vnc_zlog_debug_any(
@@ -1020,8 +1018,13 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 
 	/* save backref to rfapi handle */
 	bgp_path_info_extra_get(new);
-	new->extra->vnc.export.rfapi_handle = (void *)rfd;
-	encode_label(label_val, &new->extra->label[0]);
+	new->extra->vnc = XCALLOC(MTYPE_BGP_ROUTE_EXTRA_VNC,
+				  sizeof(struct bgp_path_info_extra_vnc));
+	new->extra->vnc->vnc.export.rfapi_handle = (void *)rfd;
+
+	encode_label(label_val, &bgp_labels.label[0]);
+	bgp_labels.num_labels = 1;
+	new->extra->labels = bgp_labels_intern(&bgp_labels);
 
 	/* debug */
 
@@ -1047,7 +1050,7 @@ void add_vnc_route(struct rfapi_descriptor *rfd, /* cookie, VPN UN addr, peer */
 	}
 
 	bgp_dest_unlock_node(bn);
-	bgp_process(bgp, bn, afi, safi);
+	bgp_process(bgp, bn, new, afi, safi);
 
 	vnc_zlog_debug_any(
 		"%s: Added route (safi=%s) at prefix %s (bn=%p, prd=%pRDP)",

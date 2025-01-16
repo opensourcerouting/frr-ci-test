@@ -167,13 +167,13 @@ as early as possible, i.e. the first 2-week window.
 For reference, the expected release schedule according to the above is:
 
 +---------+------------+------------+------------+
-| Release | 2023-11-07 | 2024-03-05 | 2024-07-02 |
+| Release | 2024-03-12 | 2024-07-02 | 2024-11-05 |
 +---------+------------+------------+------------+
-| RC      | 2023-10-24 | 2024-02-20 | 2024-06-18 |
+| RC      | 2024-02-27 | 2024-06-18 | 2024-10-22 |
 +---------+------------+------------+------------+
-| dev/X.Y | 2023-10-10 | 2024-02-06 | 2024-06-04 |
+| dev/X.Y | 2024-02-13 | 2024-06-04 | 2024-10-08 |
 +---------+------------+------------+------------+
-| freeze  | 2023-09-26 | 2024-01-23 | 2024-05-21 |
+| freeze  | 2024-01-30 | 2024-05-21 | 2024-09-24 |
 +---------+------------+------------+------------+
 
 Here is the hint on how to get the dates easily:
@@ -1305,6 +1305,16 @@ MemorySanitizer
       --enable-memory-sanitizer
 
    to ``configure``.
+
+UndefinedSanitizer
+   Similar to AddressSanitizer, this tool provides runtime instrumentation for
+   detecting use of undefined behavior in C.  Testing your own code with this
+   tool before submission is encouraged.  You can enable it by passing::
+
+      --enable-undefined-sanitizer
+
+    to ``configure``.  If you run FRR with this you will probably also have
+    to set ``sudo sysctl vm.mmap_rnd_bits=28``
 
 All of the above tools are available in the Clang/LLVM toolchain since 3.4.
 AddressSanitizer and ThreadSanitizer are available in recent versions of GCC,

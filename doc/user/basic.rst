@@ -129,6 +129,20 @@ Basic Config Commands
    deprecated ``log trap`` command) will be used. The ``no`` form of the command
    disables logging to a file.
 
+.. clicmd:: log daemon DAEMON file [FILENAME [LEVEL]]
+
+   Configure file logging for a single FRR daemon. If you want to log
+   into a file, please specify ``filename`` as in this example:
+
+   ::
+
+      log daemon bgpd file /var/log/frr/bgpd.log informational
+
+   If the optional second argument specifying the logging level is not present,
+   the default logging level (typically debugging, but can be changed using the
+   deprecated ``log trap`` command) will be used. The ``no`` form of the command
+   disables logging to a file for a single FRR daemon.
+
 .. clicmd:: log syslog [LEVEL]
 
    Enable logging output to syslog. If the optional second argument specifying
@@ -192,7 +206,7 @@ Basic Config Commands
    enabled log destinations. The note that logging includes full command lines,
    including passwords. If the daemon startup option `--command-log-always`
    is used to start the daemon then this command is turned on by default
-   and cannot be turned off and the [no] form of the command is dissallowed.
+   and cannot be turned off and the [no] form of the command is disallowed.
 
 .. clicmd:: log filtered-file [FILENAME [LEVEL]]
 
@@ -668,6 +682,11 @@ Terminal Mode Commands
    This command displays FRR's timer data for timers that will pop in
    the future.
 
+.. clicmd:: show configuration running [<json|xml> [translate WORD]] [with-defaults] DAEMON
+
+   This command displays the northbound/YANG configuration data for a
+   daemon in text/vty, json, or xml format.
+
 .. clicmd:: show yang operational-data XPATH [{format <json|xml>|translate TRANSLATOR|with-config}] DAEMON
 
    Display the YANG operational data starting from XPATH. The default
@@ -750,7 +769,7 @@ These options apply to all |PACKAGE_NAME| daemons.
 .. option:: --command-log-always
 
    Cause the daemon to always log commands entered to the specified log file.
-   This also makes the `no log commands` command dissallowed.  Enabling this
+   This also makes the `no log commands` command disallowed. Enabling this
    is suggested if you have need to track what the operator is doing on
    this router.
 

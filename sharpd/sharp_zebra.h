@@ -55,7 +55,7 @@ extern void sharp_zebra_send_arp(const struct interface *ifp,
 /* Register Link State Opaque messages */
 extern void sharp_zebra_register_te(void);
 
-extern void sharp_redistribute_vrf(struct vrf *vrf, int source);
+extern void sharp_redistribute_vrf(struct vrf *vrf, int source, bool turn_on);
 
 extern int sharp_zebra_srv6_manager_get_locator_chunk(const char *lname);
 extern int sharp_zebra_srv6_manager_release_locator_chunk(const char *lname);
@@ -71,4 +71,6 @@ extern int sharp_zebra_send_tc_filter_rate(struct interface *ifp,
 					   const struct prefix *destination,
 					   uint8_t ip_proto, uint16_t src_port,
 					   uint16_t dst_port, uint64_t rate);
+
+extern void sharp_zebra_register_neigh(vrf_id_t vrf_id, afi_t afi, bool reg);
 #endif

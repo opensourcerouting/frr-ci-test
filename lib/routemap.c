@@ -2548,7 +2548,6 @@ route_map_result_t route_map_apply_ext(struct route_map *map,
 	struct route_map_index *index = NULL;
 	struct route_map_rule *set = NULL;
 	bool skip_match_clause = false;
-	struct prefix conv;
 
 	if (recursion > RMAP_RECURSION_LIMIT) {
 		if (map)
@@ -2571,31 +2570,14 @@ route_map_result_t route_map_apply_ext(struct route_map *map,
 
 	map->applied++;
 
-	/*
-	 * Handling for matching evpn_routes in the prefix table.
-	 *
-	 * We convert type2/5 prefix to ipv4/6 prefix to do longest
-	 * prefix matching on.
-	 */
 	if (prefix->family == AF_EVPN) {
-		if (evpn_prefix2prefix(prefix, &conv) != 0) {
-			if (unlikely(CHECK_FLAG(rmap_debug,
-						DEBUG_ROUTEMAP_DETAIL)))
-				zlog_debug(
-					"Unable to convert EVPN prefix %pFX into IPv4/IPv6 prefix. Falling back to non-optimized route-map lookup",
-					prefix);
-		} else {
-			if (unlikely(CHECK_FLAG(rmap_debug,
-						DEBUG_ROUTEMAP_DETAIL)))
-				zlog_debug(
-					"Converted EVPN prefix %pFX into %pFX for optimized route-map lookup",
-					prefix, &conv);
-
-			prefix = &conv;
-		}
+		index = map->head;
+	} else {
+		skip_match_clause = true;
+		index = route_map_get_index(map, prefix, match_object,
+					    &match_ret);
 	}
 
-	index = route_map_get_index(map, prefix, match_object, &match_ret);
 	if (index) {
 		index->applied++;
 		if (unlikely(CHECK_FLAG(rmap_debug, DEBUG_ROUTEMAP)))
@@ -2619,7 +2601,6 @@ route_map_result_t route_map_apply_ext(struct route_map *map,
 			ret = RMAP_DENYMATCH;
 		goto route_map_apply_end;
 	}
-	skip_match_clause = true;
 
 	for (; index; index = index->next) {
 		if (!skip_match_clause) {
@@ -3409,7 +3390,7 @@ DEFUN_HIDDEN(show_route_map_pfx_tbl, show_route_map_pfx_tbl_cmd,
 }
 
 /* Initialization of route map vector. */
-void route_map_init(void)
+void route_map_init_new(bool in_backend)
 {
 	int i;
 
@@ -3424,7 +3405,10 @@ void route_map_init(void)
 
 	UNSET_FLAG(rmap_debug, DEBUG_ROUTEMAP);
 
-	route_map_cli_init();
+	if (!in_backend) {
+		/* we do not want to handle config commands in the backend */
+		route_map_cli_init();
+	}
 
 	/* Install route map top node. */
 	install_node(&rmap_debug_node);
@@ -3443,4 +3427,9 @@ void route_map_init(void)
 	install_element(ENABLE_NODE, &no_debug_rmap_cmd);
 
 	install_element(ENABLE_NODE, &show_route_map_pfx_tbl_cmd);
+}
+
+void route_map_init(void)
+{
+	route_map_init_new(false);
 }

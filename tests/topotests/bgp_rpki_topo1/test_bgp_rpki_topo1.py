@@ -22,12 +22,20 @@ pytestmark = [pytest.mark.bgpd]
 
 
 def build_topo(tgen):
-    for routern in range(1, 3):
+    for routern in range(1, 5):
         tgen.add_router("r{}".format(routern))
 
     switch = tgen.add_switch("s1")
     switch.add_link(tgen.gears["r1"])
     switch.add_link(tgen.gears["r2"])
+
+    switch = tgen.add_switch("s2")
+    switch.add_link(tgen.gears["r2"])
+    switch.add_link(tgen.gears["r3"])
+
+    switch = tgen.add_switch("s3")
+    switch.add_link(tgen.gears["r2"])
+    switch.add_link(tgen.gears["r4"])
 
 
 def setup_module(mod):
@@ -36,7 +44,7 @@ def setup_module(mod):
 
     router_list = tgen.routers()
 
-    for i, (rname, router) in enumerate(router_list.items(), 1):
+    for _, (rname, router) in enumerate(router_list.items(), 1):
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )
@@ -49,25 +57,34 @@ def setup_module(mod):
             " -M bgpd_rpki" if rname == "r2" else "",
         )
 
+    tgen.gears["r2"].run("ip link add vrf10 type vrf table 10")
+    tgen.gears["r2"].run("ip link set vrf10 up")
+
+    tgen.gears["r2"].run("ip link set r2-eth1 master vrf10")
+
     tgen.start_router()
 
     global rtrd_process
+    rtrd_process = {}
 
-    rname = "r1"
+    for rname in ["r1", "r3"]:
+        rtr_path = os.path.join(CWD, rname)
+        log_dir = os.path.join(tgen.logdir, rname)
+        log_file = os.path.join(log_dir, "rtrd.log")
 
-    rtr_path = os.path.join(CWD, rname)
-    log_dir = os.path.join(tgen.logdir, rname)
-    log_file = os.path.join(log_dir, "rtrd.log")
-
-    tgen.gears[rname].cmd("chmod u+x {}/rtrd.py".format(rtr_path))
-    rtrd_process = tgen.gears[rname].popen("{}/rtrd.py {}".format(rtr_path, log_file))
+        tgen.gears[rname].cmd("chmod u+x {}/rtrd.py".format(rtr_path))
+        rtrd_process[rname] = tgen.gears[rname].popen(
+            "{}/rtrd.py {}".format(rtr_path, log_file)
+        )
 
 
 def teardown_module(mod):
     tgen = get_topogen()
 
-    logger.info("r1: sending SIGTERM to rtrd RPKI server")
-    rtrd_process.kill()
+    for rname in ["r1", "r3"]:
+        logger.info("{}: sending SIGTERM to rtrd RPKI server".format(rname))
+        rtrd_process[rname].kill()
+
     tgen.stop_topology()
 
 
@@ -114,7 +131,7 @@ def test_show_bgp_rpki_prefixes():
 
     for rname in ["r1", "r3"]:
         logger.info("{}: checking if rtrd is running".format(rname))
-        if rtrd_process.poll() is not None:
+        if rtrd_process[rname].poll() is not None:
             pytest.skip(tgen.errors)
 
     rname = "r2"
@@ -156,7 +173,7 @@ def test_show_bgp_rpki_prefixes_no_rpki_cache():
 
     for rname in ["r1", "r3"]:
         logger.info("{}: checking if rtrd is running".format(rname))
-        if rtrd_process.poll() is not None:
+        if rtrd_process[rname].poll() is not None:
             pytest.skip(tgen.errors)
 
     def _show_rpki_no_connection(rname):
@@ -172,7 +189,7 @@ def test_show_bgp_rpki_prefixes_no_rpki_cache():
         """
 configure
 rpki
- no rpki cache 192.0.2.1 15432 preference 1
+ no rpki cache tcp 192.0.2.1 15432 preference 1
 exit
 """
     )
@@ -192,7 +209,7 @@ def test_show_bgp_rpki_prefixes_reconnect():
 
     for rname in ["r1", "r3"]:
         logger.info("{}: checking if rtrd is running".format(rname))
-        if rtrd_process.poll() is not None:
+        if rtrd_process[rname].poll() is not None:
             pytest.skip(tgen.errors)
 
     step("Restore RPKI server configuration")
@@ -202,7 +219,7 @@ def test_show_bgp_rpki_prefixes_reconnect():
         """
 configure
 rpki
- rpki cache 192.0.2.1 15432 preference 1
+ rpki cache tcp 192.0.2.1 15432 preference 1
 exit
 """
     )
@@ -241,7 +258,7 @@ def test_show_bgp_rpki_route_map():
 
     for rname in ["r1", "r3"]:
         logger.info("{}: checking if rtrd is running".format(rname))
-        if rtrd_process.poll() is not None:
+        if rtrd_process[rname].poll() is not None:
             pytest.skip(tgen.errors)
 
     step("Apply RPKI valid route-map on neighbor")
@@ -281,6 +298,154 @@ router bgp 65002
         )
         _, result = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
         assert result is None, "Unexpected prefixes RPKI state on {}".format(rname)
+
+
+def test_show_bgp_rpki_prefixes_vrf():
+    tgen = get_topogen()
+
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    for rname in ["r1", "r3"]:
+        logger.info("{}: checking if rtrd is running".format(rname))
+        if rtrd_process[rname].poll() is not None:
+            pytest.skip(tgen.errors)
+
+    step("Configure RPKI cache server on vrf10")
+
+    rname = "r2"
+    tgen.gears[rname].vtysh_cmd(
+        """
+configure
+vrf vrf10
+ rpki
+  rpki cache tcp 192.0.2.3 15432 preference 1
+ exit
+exit
+"""
+    )
+
+    step("Check vrf10 RPKI prefix table")
+
+    expected = open(os.path.join(CWD, "{}/rpki_prefix_table.json".format(rname))).read()
+    expected_json = json.loads(expected)
+    test_func = functools.partial(show_rpki_prefixes, rname, expected_json, vrf="vrf10")
+    _, result = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+    assert result is None, "Failed to see RPKI prefixes on {}".format(rname)
+
+    for rpki_state in ["valid", "notfound", None]:
+        if rpki_state:
+            step(
+                "Check RPKI state of prefixes in vrf10 BGP table: {}".format(rpki_state)
+            )
+        else:
+            step("Check prefixes in vrf10 BGP table")
+        expected = open(
+            os.path.join(
+                CWD,
+                "{}/bgp_table_rpki_{}.json".format(
+                    rname, rpki_state if rpki_state else "any"
+                ),
+            )
+        ).read()
+        expected_json = json.loads(expected)
+        test_func = functools.partial(
+            show_bgp_ipv4_table_rpki, rname, rpki_state, expected_json, vrf="vrf10"
+        )
+        _, result = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+        assert result is None, "Unexpected prefixes RPKI state on {}".format(rname)
+
+
+def test_show_bgp_rpki_route_map_vrf():
+    tgen = get_topogen()
+
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    for rname in ["r1", "r3"]:
+        logger.info("{}: checking if rtrd is running".format(rname))
+        if rtrd_process[rname].poll() is not None:
+            pytest.skip(tgen.errors)
+
+    step("Apply RPKI valid route-map on vrf10 neighbor")
+
+    rname = "r2"
+    tgen.gears[rname].vtysh_cmd(
+        """
+configure
+router bgp 65002 vrf vrf10
+ address-family ipv4 unicast
+  neighbor 192.0.2.3 route-map RPKI in
+"""
+    )
+
+    for rpki_state in ["valid", "notfound", None]:
+        if rpki_state:
+            step(
+                "Check RPKI state of prefixes in vrf10 BGP table: {}".format(rpki_state)
+            )
+        else:
+            step("Check prefixes in vrf10 BGP table")
+        expected = open(
+            os.path.join(
+                CWD,
+                "{}/bgp_table_rmap_rpki_{}.json".format(
+                    rname, rpki_state if rpki_state else "any"
+                ),
+            )
+        ).read()
+        expected_json = json.loads(expected)
+        test_func = functools.partial(
+            show_bgp_ipv4_table_rpki,
+            rname,
+            rpki_state,
+            expected_json,
+            vrf="vrf10",
+        )
+        _, result = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
+        assert result is None, "Unexpected prefixes RPKI state on {}".format(rname)
+
+
+def test_bgp_ecommunity_rpki():
+    tgen = get_topogen()
+
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    r2 = tgen.gears["r2"]
+    r4 = tgen.gears["r4"]
+
+    # Flush all the states what was before and try sending out the prefixes
+    # with RPKI extended community.
+    r2.vtysh_cmd("clear ip bgp 192.168.4.4 soft out")
+
+    def _bgp_check_ecommunity_rpki(community=None):
+        output = json.loads(r4.vtysh_cmd("show bgp ipv4 unicast 198.51.100.0/24 json"))
+        expected = {
+            "paths": [
+                {
+                    "extendedCommunity": community,
+                }
+            ]
+        }
+        return topotest.json_cmp(output, expected)
+
+    test_func = functools.partial(_bgp_check_ecommunity_rpki, {"string": "OVS:valid"})
+    _, result = topotest.run_and_expect(test_func, None, count=30, wait=1)
+    assert result is None, "Didn't receive RPKI extended community"
+
+    r2.vtysh_cmd(
+        """
+    configure terminal
+     router bgp 65002
+      address-family ipv4 unicast
+       no neighbor 192.168.4.4 send-community extended rpki
+    """
+    )
+
+    test_func = functools.partial(_bgp_check_ecommunity_rpki)
+    _, result = topotest.run_and_expect(test_func, None, count=30, wait=1)
+    assert result is None, "Received RPKI extended community"
 
 
 if __name__ == "__main__":

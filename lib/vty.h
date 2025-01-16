@@ -122,6 +122,10 @@ struct vty {
 	size_t num_cfg_changes;
 	struct nb_cfg_change cfg_changes[VTY_MAXCFGCHANGES];
 
+	/* Input parameters */
+	size_t num_rpc_params;
+	struct nb_cfg_change rpc_params[VTY_MAXCFGCHANGES];
+
 	/* XPath of the current node */
 	int xpath_index;
 	char xpath[VTY_MAXDEPTH][XPATH_MAXLEN];
@@ -232,10 +236,6 @@ struct vty {
 	uintptr_t mgmt_req_pending_data;
 	bool mgmt_locked_candidate_ds;
 	bool mgmt_locked_running_ds;
-	/* Need to track when we file-lock in vtysh to re-lock on end/conf t
-	 * workaround
-	 */
-	bool vtysh_file_locked;
 };
 
 static inline void vty_push_context(struct vty *vty, int node, uint64_t id)
@@ -378,6 +378,8 @@ extern bool vty_set_include(struct vty *vty, const char *regexp);
  */
 extern int vty_json(struct vty *vty, struct json_object *json);
 extern int vty_json_no_pretty(struct vty *vty, struct json_object *json);
+void vty_json_key(struct vty *vty, const char *key, bool *first_key);
+void vty_json_close(struct vty *vty, bool first_key);
 extern void vty_json_empty(struct vty *vty, struct json_object *json);
 /* post fd to be passed to the vtysh client
  * fd is owned by the VTY code after this and will be closed when done
@@ -420,8 +422,15 @@ extern int vty_mgmt_send_commit_config(struct vty *vty, bool validate_only,
 extern int vty_mgmt_send_get_req(struct vty *vty, bool is_config,
 				 Mgmtd__DatastoreId datastore,
 				 const char **xpath_list, int num_req);
-extern int vty_mgmt_send_get_data_req(struct vty *vty, LYD_FORMAT result_type,
-				      uint8_t flags, const char *xpath);
+extern int vty_mgmt_send_get_data_req(struct vty *vty, uint8_t datastore,
+				      LYD_FORMAT result_type, uint8_t flags,
+				      uint8_t defaults, const char *xpath);
+extern int vty_mgmt_send_edit_req(struct vty *vty, uint8_t datastore,
+				  LYD_FORMAT request_type, uint8_t flags,
+				  uint8_t operation, const char *xpath,
+				  const char *data);
+extern int vty_mgmt_send_rpc_req(struct vty *vty, LYD_FORMAT request_type,
+				 const char *xpath, const char *data);
 extern int vty_mgmt_send_lockds_req(struct vty *vty, Mgmtd__DatastoreId ds_id,
 				    bool lock, bool scok);
 extern void vty_mgmt_resume_response(struct vty *vty, int ret);

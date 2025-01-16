@@ -46,7 +46,7 @@ def setup_module(mod):
 
     router_list = tgen.routers()
 
-    for i, (rname, router) in enumerate(router_list.items(), 1):
+    for _, (rname, router) in enumerate(router_list.items(), 1):
         router.load_config(
             TopoRouter.RD_ZEBRA, os.path.join(CWD, "{}/zebra.conf".format(rname))
         )
@@ -62,23 +62,52 @@ def teardown_module(mod):
     tgen.stop_topology()
 
 
+expected_1 = {
+    "routes": {
+        "172.16.255.30/32": [{"path": ""}],
+        "172.16.255.31/32": [{"path": "65002"}],
+        "172.16.255.32/32": [{"path": "65003"}],
+    }
+}
+
+expected_2 = {
+    "routes": {
+        "172.16.255.30/32": [{"path": ""}],
+        "172.16.255.31/32": [{"path": "65002"}],
+        "172.16.255.32/32": [{"path": ""}],
+    }
+}
+
+expected_3 = {
+    "routes": {
+        "172.16.255.30/32": [{"path": ""}],
+        "172.16.255.31/32": [{"path": "65002"}],
+        "172.16.255.32/32": [{"path": "65002 65003"}],
+    }
+}
+
+expected_4 = {
+    "routes": {
+        "172.16.255.30/32": [{"path": ""}],
+        "172.16.255.31/32": [{"path": "65002"}],
+        "172.16.255.32/32": [{"path": "65002"}],
+    }
+}
+
+
+def bgp_converge(router, expected):
+    output = json.loads(router.vtysh_cmd("show bgp ipv4 unicast json"))
+
+    return topotest.json_cmp(output, expected)
+
+
 def test_bgp_set_aspath_exclude():
     tgen = get_topogen()
 
     if tgen.routers_have_failure():
         pytest.skip(tgen.errors)
 
-    def _bgp_converge(router):
-        output = json.loads(router.vtysh_cmd("show bgp ipv4 unicast json"))
-        expected = {
-            "routes": {
-                "172.16.255.31/32": [{"path": "65002"}],
-                "172.16.255.32/32": [{"path": ""}],
-            }
-        }
-        return topotest.json_cmp(output, expected)
-
-    test_func = functools.partial(_bgp_converge, tgen.gears["r1"])
+    test_func = functools.partial(bgp_converge, tgen.gears["r1"], expected_1)
     _, result = topotest.run_and_expect(test_func, None, count=30, wait=0.5)
 
     assert result is None, "Failed overriding incoming AS-PATH with route-map"
@@ -92,52 +121,107 @@ def test_bgp_set_aspath_exclude_access_list():
 
     rname = "r1"
     r1 = tgen.gears[rname]
+    # tgen.mininet_cli()
 
     r1.vtysh_cmd(
         """
 conf
  bgp as-path access-list FIRST permit ^65 
  route-map r2 permit 6 
+  no set as-path exclude as-path-access-list SECOND
   set as-path exclude as-path-access-list FIRST
     """
     )
+    # tgen.mininet_cli()
+    r1.vtysh_cmd(
+        """
+clear bgp *
+    """
+    )
 
-    expected = {
-        "routes": {
-            "172.16.255.31/32": [{"path": ""}],
-            "172.16.255.32/32": [{"path": ""}],
-        }
-    }
-
-    def _bgp_regexp_1(router):
-        output = json.loads(router.vtysh_cmd("show bgp ipv4 unicast json"))
-
-        return topotest.json_cmp(output, expected)
-
-    test_func = functools.partial(_bgp_regexp_1, tgen.gears["r1"])
+    test_func = functools.partial(bgp_converge, tgen.gears["r1"], expected_2)
     _, result = topotest.run_and_expect(test_func, None, count=30, wait=0.5)
 
-    assert result is None, "Failed overriding incoming AS-PATH with regex 1 route-map"
+    assert result is None, "Failed change of exclude rule in route map"
     r1.vtysh_cmd(
         """
 conf
- bgp as-path access-list SECOND permit 2
  route-map r2 permit 6
+  no set as-path exclude as-path-access-list FIRST
   set as-path exclude as-path-access-list SECOND
     """
     )
 
-    expected = {
-        "routes": {
-            "172.16.255.31/32": [{"path": "65003"}],
-            "172.16.255.32/32": [{"path": "65003"}],
-        }
-    }
-
-    test_func = functools.partial(_bgp_regexp_1, tgen.gears["r1"])
+    # tgen.mininet_cli()
+    test_func = functools.partial(bgp_converge, tgen.gears["r1"], expected_1)
     _, result = topotest.run_and_expect(test_func, None, count=30, wait=0.5)
 
-    assert result is None, "Failed overriding incoming AS-PATH with regex 2 route-map"
+    assert result is None, "Failed reverting exclude rule in route map"
+
+
+def test_no_bgp_set_aspath_exclude_access_list():
+    tgen = get_topogen()
+
+    if tgen.routers_have_failure():
+        pytest.skip(tgen.errors)
+
+    rname = "r1"
+    r1 = tgen.gears[rname]
+
+    r1.vtysh_cmd(
+        """
+conf
+ no bgp as-path access-list SECOND permit 2$
+    """
+    )
+
+    r1.vtysh_cmd(
+        """
+clear bgp *
+    """
+    )
+
+    test_func = functools.partial(bgp_converge, tgen.gears["r1"], expected_3)
+    _, result = topotest.run_and_expect(test_func, None, count=30, wait=0.5)
+
+    assert result is None, "Failed to removing current accesslist"
+
+    # tgen.mininet_cli()
+    r1.vtysh_cmd(
+        """
+conf
+ bgp as-path access-list SECOND permit 3$
+    """
+    )
+    r1.vtysh_cmd(
+        """
+clear bgp *
+    """
+    )
+
+    test_func = functools.partial(bgp_converge, tgen.gears["r1"], expected_4)
+    _, result = topotest.run_and_expect(test_func, None, count=30, wait=0.5)
+
+    assert result is None, "Failed to renegotiate with peers 2"
+
+    r1.vtysh_cmd(
+        """
+conf
+ route-map r2 permit 6
+  no set as-path exclude as-path-access-list SECOND
+    """
+    )
+
+    r1.vtysh_cmd(
+        """
+clear bgp *
+    """
+    )
+
+    test_func = functools.partial(bgp_converge, tgen.gears["r1"], expected_3)
+    _, result = topotest.run_and_expect(test_func, None, count=30, wait=0.5)
+
+    assert result is None, "Failed to renegotiate with peers 2"
 
 
 if __name__ == "__main__":

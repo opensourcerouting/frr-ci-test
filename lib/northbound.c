@@ -157,12 +157,19 @@ void nb_nodes_delete(void)
 struct nb_node *nb_node_find(const char *path)
 {
 	const struct lysc_node *snode;
+	uint32_t llopts = 0;
 
 	/*
 	 * Use libyang to find the schema node associated to the path and get
-	 * the northbound node from there (snode private pointer).
+	 * the northbound node from there (snode private pointer). We need to
+	 * disable logging temporarily to avoid libyang from logging an error
+	 * message when the node is not found.
 	 */
+	ly_temp_log_options(&llopts);
+
 	snode = yang_find_snode(ly_native_ctx, path, 0);
+
+	ly_temp_log_options(NULL);
 	if (!snode)
 		return NULL;
 
@@ -275,6 +282,8 @@ static unsigned int nb_node_validate_cbs(const struct nb_node *nb_node)
 				     !!nb_node->cbs.lookup_entry, false);
 	error += nb_node_validate_cb(nb_node, NB_CB_RPC, !!nb_node->cbs.rpc,
 				     false);
+	error += nb_node_validate_cb(nb_node, NB_CB_NOTIFY,
+				     !!nb_node->cbs.notify, true);
 
 	return error;
 }
@@ -380,11 +389,27 @@ void nb_config_replace(struct nb_config *config_dst,
 static inline int nb_config_cb_compare(const struct nb_config_cb *a,
 				       const struct nb_config_cb *b)
 {
-	/* Sort by priority first. */
-	if (a->nb_node->priority < b->nb_node->priority)
+	bool a_destroy = a->operation == NB_CB_DESTROY;
+	bool b_destroy = b->operation == NB_CB_DESTROY;
+
+	/*
+	 * Sort by operation first. All "destroys" must come first, to correctly
+	 * process the change of a "case" inside a "choice". The old "case" must
+	 * be deleted before the new "case" is created.
+	 */
+	if (a_destroy && !b_destroy)
 		return -1;
-	if (a->nb_node->priority > b->nb_node->priority)
+	if (!a_destroy && b_destroy)
 		return 1;
+
+	/*
+	 * Then sort by priority. If the operation is "destroy", reverse the
+	 * order, so that the dependants are deleted before the dependencies.
+	 */
+	if (a->nb_node->priority < b->nb_node->priority)
+		return !a_destroy ? -1 : 1;
+	if (a->nb_node->priority > b->nb_node->priority)
+		return !a_destroy ? 1 : -1;
 
 	/*
 	 * Preserve the order of the configuration changes as told by libyang.
@@ -408,10 +433,9 @@ static inline int nb_config_cb_compare(const struct nb_config_cb *a,
 }
 RB_GENERATE(nb_config_cbs, nb_config_cb, entry, nb_config_cb_compare);
 
-static void nb_config_diff_add_change(struct nb_config_cbs *changes,
-				      enum nb_cb_operation operation,
-				      uint32_t *seq,
-				      const struct lyd_node *dnode)
+void nb_config_diff_add_change(struct nb_config_cbs *changes,
+			       enum nb_cb_operation operation, uint32_t *seq,
+			       const struct lyd_node *dnode)
 {
 	struct nb_config_change *change;
 
@@ -685,24 +709,16 @@ static int dnode_create(struct nb_config *candidate, const char *xpath,
 	return NB_OK;
 }
 
-int nb_candidate_edit(struct nb_config *candidate,
-		      const struct nb_node *nb_node,
+int nb_candidate_edit(struct nb_config *candidate, const struct nb_node *nb_node,
 		      enum nb_operation operation, const char *xpath,
 		      const struct yang_data *previous,
 		      const struct yang_data *data)
 {
-	struct lyd_node *dnode, *dep_dnode, *old_dnode, *parent;
-	char xpath_edit[XPATH_MAXLEN];
+	struct lyd_node *dnode, *dep_dnode, *old_dnode;
 	char dep_xpath[XPATH_MAXLEN];
+	struct lyd_node *parent = NULL;
 	uint32_t options = 0;
 	LY_ERR err;
-
-	/* Use special notation for leaf-lists (RFC 6020, section 9.13.5). */
-	if (nb_node->snode->nodetype == LYS_LEAFLIST)
-		snprintf(xpath_edit, sizeof(xpath_edit), "%s[.='%s']", xpath,
-			 data->value);
-	else
-		strlcpy(xpath_edit, xpath, sizeof(xpath_edit));
 
 	switch (operation) {
 	case NB_OP_CREATE:
@@ -710,7 +726,7 @@ int nb_candidate_edit(struct nb_config *candidate,
 		options = LYD_NEW_PATH_UPDATE;
 		fallthrough;
 	case NB_OP_CREATE_EXCL:
-		err = dnode_create(candidate, xpath_edit, data->value, options,
+		err = dnode_create(candidate, xpath, data->value, options,
 				   &dnode);
 		if (err) {
 			return err;
@@ -737,7 +753,7 @@ int nb_candidate_edit(struct nb_config *candidate,
 		break;
 	case NB_OP_DESTROY:
 	case NB_OP_DELETE:
-		dnode = yang_dnode_get(candidate->dnode, xpath_edit);
+		dnode = yang_dnode_get(candidate->dnode, xpath);
 		if (!dnode) {
 			if (operation == NB_OP_DELETE)
 				return NB_ERR;
@@ -755,12 +771,12 @@ int nb_candidate_edit(struct nb_config *candidate,
 		lyd_free_tree(dnode);
 		break;
 	case NB_OP_REPLACE:
-		old_dnode = yang_dnode_get(candidate->dnode, xpath_edit);
+		old_dnode = yang_dnode_get(candidate->dnode, xpath);
 		if (old_dnode) {
 			parent = lyd_parent(old_dnode);
 			lyd_unlink_tree(old_dnode);
 		}
-		err = dnode_create(candidate, xpath_edit, data->value, options,
+		err = dnode_create(candidate, xpath, data->value, options,
 				   &dnode);
 		if (!err && dnode && !old_dnode) {
 			/* create dependency if the node didn't exist */
@@ -797,6 +813,231 @@ int nb_candidate_edit(struct nb_config *candidate,
 	return NB_OK;
 }
 
+static int nb_candidate_edit_tree_add(struct nb_config *candidate,
+				      enum nb_operation operation,
+				      LYD_FORMAT format, const char *xpath,
+				      const char *data, char *xpath_created,
+				      char *errmsg, size_t errmsg_len)
+{
+	struct lyd_node *tree = NULL;
+	struct lyd_node *parent = NULL;
+	struct lyd_node *dnode = NULL;
+	struct lyd_node *existing = NULL;
+	struct lyd_node *ex_parent = NULL;
+	char *parent_xpath = NULL;
+	struct ly_in *in;
+	LY_ERR err;
+	bool root;
+	int ret;
+
+	ly_in_new_memory(data, &in);
+
+	root = xpath[0] == 0 || (xpath[0] == '/' && xpath[1] == 0);
+
+	/* get parent xpath if xpath is not root */
+	if (!root) {
+		/* NB_OP_CREATE_EXCT already expects parent xpath */
+		parent_xpath = XSTRDUP(MTYPE_TMP, xpath);
+
+		/* for other operations - pop one level */
+		if (operation != NB_OP_CREATE_EXCL) {
+			ret = yang_xpath_pop_node(parent_xpath);
+			if (ret) {
+				snprintf(errmsg, errmsg_len, "Invalid xpath");
+				goto done;
+			}
+
+			/* root is not actually a parent */
+			if (parent_xpath[0] == 0)
+				XFREE(MTYPE_TMP, parent_xpath);
+		}
+	}
+
+	/*
+	 * Create parent if it's not root. We're creating a new tree here to be
+	 * merged later with candidate.
+	 */
+	if (parent_xpath) {
+		err = lyd_new_path2(NULL, ly_native_ctx, parent_xpath, NULL, 0,
+				    0, 0, &tree, &parent);
+		if (err) {
+			yang_print_errors(ly_native_ctx, errmsg, errmsg_len);
+			ret = NB_ERR;
+			goto done;
+		}
+		assert(parent);
+	}
+
+	/* parse data */
+	err = yang_lyd_parse_data(ly_native_ctx, parent, in, format,
+				  LYD_PARSE_ONLY | LYD_PARSE_STRICT |
+					  LYD_PARSE_NO_STATE,
+				  0, &dnode);
+	if (err) {
+		yang_print_errors(ly_native_ctx, errmsg, errmsg_len);
+		ret = NB_ERR;
+		goto done;
+	}
+
+	/* set the tree if we created a top-level node */
+	if (!parent)
+		tree = dnode;
+
+	/* save xpath of the created node */
+	lyd_path(dnode, LYD_PATH_STD, xpath_created, XPATH_MAXLEN);
+
+	/* verify that list keys are the same in the xpath and the data tree */
+	if (!root && (operation == NB_OP_REPLACE || operation == NB_OP_MODIFY)) {
+		if (lyd_find_path(tree, xpath, 0, NULL)) {
+			snprintf(errmsg, errmsg_len,
+				 "List keys in xpath and data tree are different");
+			ret = NB_ERR;
+			goto done;
+		}
+	}
+
+	/* check if the node already exists in candidate */
+	if (operation == NB_OP_CREATE_EXCL || operation == NB_OP_REPLACE) {
+		existing = yang_dnode_get(candidate->dnode, xpath_created);
+
+		/* if the existing node is implicit default, ignore */
+		if (existing && (existing->flags & LYD_DEFAULT))
+			existing = NULL;
+
+		if (existing) {
+			if (operation == NB_OP_CREATE_EXCL) {
+				snprintf(errmsg, errmsg_len,
+					 "Data already exists");
+				ret = NB_ERR;
+				goto done;
+			}
+
+			if (root) {
+				candidate->dnode = NULL;
+			} else {
+				/* if it's the first top-level node, update candidate */
+				if (candidate->dnode == existing)
+					candidate->dnode =
+						candidate->dnode->next;
+
+				ex_parent = lyd_parent(existing);
+				lyd_unlink_tree(existing);
+			}
+		}
+	}
+
+	err = lyd_merge_siblings(&candidate->dnode, tree,
+				 LYD_MERGE_DESTRUCT | LYD_MERGE_WITH_FLAGS);
+	if (err) {
+		/* if replace failed, restore the original node */
+		if (existing) {
+			if (root) {
+				/* Restoring the whole config. */
+				candidate->dnode = existing;
+			} else if (ex_parent) {
+				/*
+				 * Restoring a nested node. Insert it as a
+				 * child.
+				 */
+				lyd_insert_child(ex_parent, existing);
+			} else {
+				/*
+				 * Restoring a top-level node. Insert it as a
+				 * sibling to candidate->dnode to make sure
+				 * the linkage is correct.
+				 */
+				lyd_insert_sibling(candidate->dnode, existing,
+						   &candidate->dnode);
+			}
+		}
+		yang_print_errors(ly_native_ctx, errmsg, errmsg_len);
+		ret = NB_ERR;
+		goto done;
+	} else {
+		/*
+		 * Free existing node after replace.
+		 * We're using `lyd_free_siblings` here to free the whole
+		 * tree if we replaced the root node. It won't affect other
+		 * siblings if it wasn't root, because the existing node
+		 * was unlinked from the tree.
+		 */
+		if (existing)
+			lyd_free_siblings(existing);
+
+		tree = NULL; /* LYD_MERGE_DESTRUCT deleted the tree */
+	}
+
+	ret = NB_OK;
+done:
+	if (tree)
+		lyd_free_all(tree);
+	XFREE(MTYPE_TMP, parent_xpath);
+	ly_in_free(in, 0);
+
+	return ret;
+}
+
+static int nb_candidate_edit_tree_del(struct nb_config *candidate,
+				      enum nb_operation operation,
+				      const char *xpath, char *errmsg,
+				      size_t errmsg_len)
+{
+	struct lyd_node *dnode;
+
+	/* deleting root - remove the whole config */
+	if (xpath[0] == 0 || (xpath[0] == '/' && xpath[1] == 0)) {
+		lyd_free_all(candidate->dnode);
+		candidate->dnode = NULL;
+		return NB_OK;
+	}
+
+	dnode = yang_dnode_get(candidate->dnode, xpath);
+	if (!dnode || (dnode->flags & LYD_DEFAULT)) {
+		if (operation == NB_OP_DELETE) {
+			snprintf(errmsg, errmsg_len, "Data missing");
+			return NB_ERR;
+		} else
+			return NB_OK;
+	}
+
+	/* if it's the first top-level node, update candidate */
+	if (candidate->dnode == dnode)
+		candidate->dnode = candidate->dnode->next;
+
+	lyd_free_tree(dnode);
+
+	return NB_OK;
+}
+
+int nb_candidate_edit_tree(struct nb_config *candidate,
+			   enum nb_operation operation, LYD_FORMAT format,
+			   const char *xpath, const char *data,
+			   char *xpath_created, char *errmsg, size_t errmsg_len)
+{
+	int ret = NB_ERR;
+
+	switch (operation) {
+	case NB_OP_CREATE_EXCL:
+	case NB_OP_CREATE:
+	case NB_OP_MODIFY:
+	case NB_OP_REPLACE:
+		ret = nb_candidate_edit_tree_add(candidate, operation, format,
+						 xpath, data, xpath_created,
+						 errmsg, errmsg_len);
+		break;
+	case NB_OP_DESTROY:
+	case NB_OP_DELETE:
+		ret = nb_candidate_edit_tree_del(candidate, operation, xpath,
+						 errmsg, errmsg_len);
+		break;
+	case NB_OP_MOVE:
+		/* not supported yet */
+		break;
+	}
+
+	return ret;
+}
+
 const char *nb_operation_name(enum nb_operation operation)
 {
 	switch (operation) {
@@ -829,10 +1070,12 @@ bool nb_is_operation_allowed(struct nb_node *nb_node, enum nb_operation oper)
 	return true;
 }
 
-void nb_candidate_edit_config_changes(
-	struct nb_config *candidate_config, struct nb_cfg_change cfg_changes[],
-	size_t num_cfg_changes, const char *xpath_base, char *err_buf,
-	int err_bufsize, bool *error)
+void nb_candidate_edit_config_changes(struct nb_config *candidate_config,
+				      struct nb_cfg_change cfg_changes[],
+				      size_t num_cfg_changes,
+				      const char *xpath_base, bool in_backend,
+				      char *err_buf, int err_bufsize,
+				      bool *error)
 {
 	if (error)
 		*error = false;
@@ -861,10 +1104,17 @@ void nb_candidate_edit_config_changes(
 		/* Find the northbound node associated to the data path. */
 		nb_node = nb_node_find(xpath);
 		if (!nb_node) {
-			flog_warn(EC_LIB_YANG_UNKNOWN_DATA_PATH,
-				  "%s: unknown data path: %s", __func__, xpath);
-			if (error)
-				*error = true;
+			if (in_backend)
+				DEBUGD(&nb_dbg_cbs_config,
+				       "%s: ignoring non-handled path: %s",
+				       __func__, xpath);
+			else {
+				flog_warn(EC_LIB_YANG_UNKNOWN_DATA_PATH,
+					  "%s: unknown data path: %s", __func__,
+					  xpath);
+				if (error)
+					*error = true;
+			}
 			continue;
 		}
 		/* Find if the node to be edited is not a key node */
@@ -1578,13 +1828,10 @@ const void *nb_callback_lookup_next(const struct nb_node *nb_node,
 }
 
 int nb_callback_rpc(const struct nb_node *nb_node, const char *xpath,
-		    const struct list *input, struct list *output, char *errmsg,
-		    size_t errmsg_len)
+		    const struct lyd_node *input, struct lyd_node *output,
+		    char *errmsg, size_t errmsg_len)
 {
 	struct nb_cb_rpc_args args = {};
-
-	if (CHECK_FLAG(nb_node->flags, F_NB_NODE_IGNORE_CFG_CBS))
-		return 0;
 
 	DEBUGD(&nb_dbg_cbs_rpc, "northbound RPC: %s", xpath);
 
@@ -1594,6 +1841,18 @@ int nb_callback_rpc(const struct nb_node *nb_node, const char *xpath,
 	args.errmsg = errmsg;
 	args.errmsg_len = errmsg_len;
 	return nb_node->cbs.rpc(&args);
+}
+
+void nb_callback_notify(const struct nb_node *nb_node, const char *xpath,
+			struct lyd_node *dnode)
+{
+	struct nb_cb_notify_args args = {};
+
+	DEBUGD(&nb_dbg_cbs_notify, "northbound notify: %s", xpath);
+
+	args.xpath = xpath;
+	args.dnode = dnode;
+	nb_node->cbs.notify(&args);
 }
 
 /*
@@ -1644,6 +1903,7 @@ static int nb_callback_configuration(struct nb_context *context,
 	case NB_CB_GET_KEYS:
 	case NB_CB_LOOKUP_ENTRY:
 	case NB_CB_RPC:
+	case NB_CB_NOTIFY:
 		yang_dnode_get_path(dnode, xpath, sizeof(xpath));
 		flog_err(EC_LIB_DEVELOPMENT,
 			 "%s: unknown operation (%u) [xpath %s]", __func__,
@@ -1787,6 +2047,7 @@ nb_apply_finish_cb_new(struct nb_config_cbs *cbs, const struct nb_node *nb_node,
 	struct nb_config_cb *cb;
 
 	cb = XCALLOC(MTYPE_TMP, sizeof(*cb));
+	cb->operation = NB_CB_APPLY_FINISH;
 	cb->nb_node = nb_node;
 	cb->dnode = dnode;
 	RB_INSERT(nb_config_cbs, cbs, cb);
@@ -1801,6 +2062,7 @@ nb_apply_finish_cb_find(struct nb_config_cbs *cbs,
 {
 	struct nb_config_cb s;
 
+	s.operation = NB_CB_APPLY_FINISH;
 	s.seq = 0;
 	s.nb_node = nb_node;
 	s.dnode = dnode;
@@ -1833,7 +2095,7 @@ static void nb_transaction_apply_finish(struct nb_transaction *transaction,
 
 			dnode = lyd_parent(dnode);
 			if (!dnode)
-				break;
+				continue;
 
 			/*
 			 * The dnode from 'delete' callbacks point to elements
@@ -1898,6 +2160,8 @@ bool nb_cb_operation_is_valid(enum nb_cb_operation operation,
 				return false;
 			break;
 		case LYS_CONTAINER:
+			if (snode->parent && snode->parent->nodetype == LYS_CASE)
+				return true;
 			scontainer = (struct lysc_node_container *)snode;
 			if (!CHECK_FLAG(scontainer->flags, LYS_PRESENCE))
 				return false;
@@ -1952,6 +2216,8 @@ bool nb_cb_operation_is_valid(enum nb_cb_operation operation,
 				return false;
 			break;
 		case LYS_CONTAINER:
+			if (snode->parent && snode->parent->nodetype == LYS_CASE)
+				return true;
 			scontainer = (struct lysc_node_container *)snode;
 			if (!CHECK_FLAG(scontainer->flags, LYS_PRESENCE))
 				return false;
@@ -2038,6 +2304,10 @@ bool nb_cb_operation_is_valid(enum nb_cb_operation operation,
 			return false;
 		}
 		return true;
+	case NB_CB_NOTIFY:
+		if (snode->nodetype != LYS_NOTIF)
+			return false;
+		return true;
 	default:
 		return false;
 	}
@@ -2048,13 +2318,77 @@ DEFINE_HOOK(nb_notification_send, (const char *xpath, struct list *arguments),
 
 int nb_notification_send(const char *xpath, struct list *arguments)
 {
+	struct lyd_node *root = NULL;
+	struct lyd_node *dnode;
+	struct yang_data *data;
+	struct listnode *ln;
+	LY_ERR err;
 	int ret;
 
 	DEBUGD(&nb_dbg_notif, "northbound notification: %s", xpath);
 
+	/*
+	 * Call old hook functions
+	 */
 	ret = hook_call(nb_notification_send, xpath, arguments);
+
+	if (!hook_have_hooks(nb_notification_tree_send))
+		goto done;
+	/*
+	 * Convert yang data arguments list to a libyang data tree for new hook
+	 * functions.
+	 */
+	for (ALL_LIST_ELEMENTS_RO(arguments, ln, data)) {
+		err = lyd_new_path(root, ly_native_ctx, data->xpath,
+				   data->value, LYD_NEW_PATH_UPDATE, &dnode);
+		if (err != LY_SUCCESS)
+			goto lyerr;
+		if (!root) {
+			root = dnode;
+			while (root->parent)
+				root = lyd_parent(root);
+		}
+	}
+
+	if (!root) {
+		err = lyd_new_path(NULL, ly_native_ctx, xpath, "", 0, &root);
+		if (err) {
+lyerr:
+			flog_err(EC_LIB_LIBYANG,
+				 "%s: error creating notification data: %s",
+				 __func__, ly_strerrcode(err));
+			ret += 1;
+			goto done;
+		}
+	}
+
+	/*
+	 * Call new hook functions
+	 */
+	ret += nb_notification_tree_send(xpath, root);
+
+done:
+	if (root)
+		lyd_free_all(root);
 	if (arguments)
 		list_delete(&arguments);
+
+	return ret;
+}
+
+DEFINE_HOOK(nb_notification_tree_send,
+	    (const char *xpath, const struct lyd_node *tree), (xpath, tree));
+
+int nb_notification_tree_send(const char *xpath, const struct lyd_node *tree)
+{
+	int ret;
+
+	assert(tree);
+
+	DEBUGD(&nb_dbg_notif, "northbound tree notification: %s",
+	       tree->schema->name);
+
+	ret = hook_call(nb_notification_tree_send, xpath, tree);
 
 	return ret;
 }
@@ -2253,6 +2587,8 @@ const char *nb_cb_operation_name(enum nb_cb_operation operation)
 		return "lookup_entry";
 	case NB_CB_RPC:
 		return "rpc";
+	case NB_CB_NOTIFY:
+		return "notify";
 	}
 
 	assert(!"Reached end of function we should never hit");
@@ -2289,8 +2625,6 @@ const char *nb_client_name(enum nb_client client)
 	switch (client) {
 	case NB_CLIENT_CLI:
 		return "CLI";
-	case NB_CLIENT_CONFD:
-		return "ConfD";
 	case NB_CLIENT_SYSREPO:
 		return "Sysrepo";
 	case NB_CLIENT_GRPC:
@@ -2375,7 +2709,8 @@ void nb_init(struct event_loop *tm,
 	for (size_t i = 0; i < nmodules; i++) {
 		DEBUGD(&nb_dbg_events, "northbound: loading %s.yang",
 		       modules[i]->name);
-		*loadedp++ = yang_module_load(modules[i]->name);
+		*loadedp++ = yang_module_load(modules[i]->name,
+					      modules[i]->features);
 	}
 
 	if (explicit_compile)

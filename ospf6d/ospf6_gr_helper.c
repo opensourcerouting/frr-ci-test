@@ -176,6 +176,7 @@ static int ospf6_extract_grace_lsa_fields(struct ospf6_lsa *lsa,
 				return OSPF6_FAILURE;
 			break;
 		default:
+			sum += TLV_SIZE(tlvh);
 			if (IS_DEBUG_OSPF6_GR)
 				zlog_debug("%s, Ignoring unknown TLV type:%d",
 					   __func__, ntohs(tlvh->type));
@@ -937,15 +938,6 @@ static void show_ospf6_gr_helper_details(struct vty *vty, struct ospf6 *ospf6,
 			(ospf6->ospf6_helper_cfg.strict_lsa_check)
 				? "Enabled"
 				: "Disabled");
-
-#if CONFDATE > 20240401
-		CPP_NOTICE("Remove deprecated json key: restartSupoort")
-#endif
-		json_object_string_add(
-			json, "restartSupoort",
-			(ospf6->ospf6_helper_cfg.only_planned_restart)
-				? "Planned Restart only"
-				: "Planned and Unplanned Restarts");
 
 		json_object_string_add(
 			json, "restartSupport",

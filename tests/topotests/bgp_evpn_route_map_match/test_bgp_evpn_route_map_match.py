@@ -10,23 +10,19 @@ Test if route-map match by EVPN route-type works.
 """
 
 import os
-import re
 import sys
 import json
 import pytest
 import functools
 
-pytestmark = pytest.mark.bgpd
+pytestmark = [pytest.mark.bgpd]
 
 CWD = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.join(CWD, "../"))
 
 # pylint: disable=C0413
 from lib import topotest
-from lib.topogen import Topogen, TopoRouter, get_topogen
-from lib.common_config import step
-
-pytestmark = [pytest.mark.bgpd]
+from lib.topogen import Topogen, get_topogen
 
 
 def setup_module(mod):
@@ -83,8 +79,8 @@ def test_bgp_evpn_route_map_match_route_type():
         )
         expected = {
             "advertisedRoutes": {
-                "10.10.10.1:2": {
-                    "[3]:[0]:[32]:[10.10.10.1]": {
+                "10.10.10.1:1": {
+                    "[5]:[0]:[32]:[10.10.10.10]": {
                         "valid": True,
                     }
                 },
@@ -102,7 +98,7 @@ def test_bgp_evpn_route_map_match_route_type():
         _bgp_converge,
     )
     _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
-    assert result is None, "MAC-IP EVPN routes should not be advertised"
+    assert result is None, "Filtered EVPN routes should not be advertised"
 
 
 if __name__ == "__main__":

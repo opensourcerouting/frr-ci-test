@@ -34,6 +34,7 @@
 #include "privs.h"
 #include "lib_errors.h"
 #include "northbound_cli.h"
+#include "mgmt_be_client.h"
 #include "network.h"
 #include "lib/printfrr.h"
 #include "frrdistance.h"
@@ -1050,7 +1051,7 @@ static size_t rip_auth_md5_ah_write(struct stream *s, struct rip_interface *ri,
 	/* RFC2080: The value used in the sequence number is
 	   arbitrary, but two suggestions are the time of the
 	   message's creation or a simple message counter. */
-	stream_putl(s, ++seq);
+	stream_putl(s, seq++);
 
 	/* Reserved field must be zero. */
 	stream_putl(s, 0);
@@ -3053,7 +3054,10 @@ DEFUN (show_ip_rip,
 	}
 
 	vty_out(vty,
-		"Codes: R - RIP, C - connected, S - Static, O - OSPF, B - BGP\n"
+		"Codes: K - kernel route, C - connected, L - local, S - static,\n"
+		"       R - RIP, O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,\n"
+		"       T - Table, v - VNC, V - VNC-Direct, A - Babel, F - PBR,\n"
+		"       f - OpenFabric, t - Table-Direct\n"
 		"Sub-codes:\n"
 		"      (n) - normal, (s) - static, (d) - default, (r) - redistribute,\n"
 		"      (i) - interface\n\n"
@@ -3252,45 +3256,6 @@ DEFUN (show_ip_rip_status,
 
 	return CMD_SUCCESS;
 }
-
-/* RIP configuration write function. */
-static int config_write_rip(struct vty *vty)
-{
-	struct rip *rip;
-	int write = 0;
-
-	RB_FOREACH(rip, rip_instance_head, &rip_instances) {
-		char xpath[XPATH_MAXLEN];
-		struct lyd_node *dnode;
-
-		snprintf(xpath, sizeof(xpath),
-			 "/frr-ripd:ripd/instance[vrf='%s']", rip->vrf_name);
-
-		dnode = yang_dnode_get(running_config->dnode, xpath);
-		assert(dnode);
-
-		nb_cli_show_dnode_cmds(vty, dnode, false);
-
-		/* Distribute configuration. */
-		config_write_distribute(vty, rip->distribute_ctx);
-
-		vty_out(vty, "exit\n");
-
-		write = 1;
-	}
-
-	return write;
-}
-
-static int config_write_rip(struct vty *vty);
-/* RIP node structure. */
-static struct cmd_node rip_node = {
-	.name = "rip",
-	.node = RIP_NODE,
-	.parent_node = CONFIG_NODE,
-	.prompt = "%s(config-router)# ",
-	.config_write = config_write_rip,
-};
 
 /* Distribute-list update functions. */
 static void rip_distribute_update(struct distribute_ctx *ctx,
@@ -3653,8 +3618,6 @@ static int rip_vrf_disable(struct vrf *vrf)
 void rip_vrf_init(void)
 {
 	vrf_init(rip_vrf_new, rip_vrf_enable, rip_vrf_disable, rip_vrf_delete);
-
-	vrf_cmd_init(NULL);
 }
 
 void rip_vrf_terminate(void)
@@ -3665,20 +3628,17 @@ void rip_vrf_terminate(void)
 /* Allocate new rip structure and set default value. */
 void rip_init(void)
 {
-	/* Install top nodes. */
-	install_node(&rip_node);
-
 	/* Install rip commands. */
 	install_element(VIEW_NODE, &show_ip_rip_cmd);
 	install_element(VIEW_NODE, &show_ip_rip_status_cmd);
 
-	install_default(RIP_NODE);
-
 	/* Debug related init. */
 	rip_debug_init();
+	/* Enable mgmt be debug */
+	mgmt_be_client_lib_vty_init();
 
 	/* Access list install. */
-	access_list_init();
+	access_list_init_new(true);
 	access_list_add_hook(rip_distribute_update_all_wrapper);
 	access_list_delete_hook(rip_distribute_update_all_wrapper);
 
@@ -3692,6 +3652,4 @@ void rip_init(void)
 
 	route_map_add_hook(rip_routemap_update);
 	route_map_delete_hook(rip_routemap_update);
-
-	if_rmap_init(RIP_NODE);
 }

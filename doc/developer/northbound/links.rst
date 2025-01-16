@@ -1,3 +1,6 @@
+Links
+=====
+
 RFCs
 ~~~~
 
@@ -191,14 +194,6 @@ pyangbind
 
 -  GitHub page: https://github.com/robshakir/pyangbind
 -  Documentation: http://pynms.io/pyangbind/
-
-ConfD
-^^^^^
-
--  Official webpage (for ConfD Basic):
-   http://www.tail-f.com/confd-basic/
--  Training Videos: http://www.tail-f.com/confd-training-videos/
--  Forum: http://discuss.tail-f.com/
 
 Sysrepo
 ^^^^^^^

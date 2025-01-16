@@ -523,11 +523,13 @@ struct stream *bpacket_reformat_for_peer(struct bpacket *pkt,
 			gnh_modified = 1;
 		}
 
-		if (IN6_IS_ADDR_UNSPECIFIED(mod_v6nhg)) {
-			if (peer->nexthop.v4.s_addr != INADDR_ANY) {
-				ipv4_to_ipv4_mapped_ipv6(mod_v6nhg,
-							 peer->nexthop.v4);
-			}
+		if (peer->nexthop.v4.s_addr != INADDR_ANY &&
+		    (IN6_IS_ADDR_UNSPECIFIED(mod_v6nhg) ||
+		     (IN6_IS_ADDR_LINKLOCAL(mod_v6nhg) &&
+		      peer->connection->su.sa.sa_family == AF_INET6 &&
+		      paf->afi == AFI_IP))) {
+			ipv4_to_ipv4_mapped_ipv6(mod_v6nhg, peer->nexthop.v4);
+			gnh_modified = 1;
 		}
 
 		if (IS_MAPPED_IPV6(&peer->nexthop.v6_global)) {
@@ -665,7 +667,7 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 	uint32_t addpath_tx_id = 0;
 	struct prefix_rd *prd = NULL;
 	mpls_label_t label = MPLS_INVALID_LABEL, *label_pnt = NULL;
-	uint32_t num_labels = 0;
+	uint8_t num_labels = 0;
 
 	if (!subgrp)
 		return NULL;
@@ -812,9 +814,12 @@ struct bpacket *subgroup_update_packet(struct update_subgroup *subgrp)
 					path);
 				label_pnt = &label;
 				num_labels = 1;
-			} else if (path && path->extra) {
-				label_pnt = &path->extra->label[0];
-				num_labels = path->extra->num_labels;
+			} else {
+				num_labels = bgp_path_info_num_labels(path);
+				label_pnt =
+					num_labels
+						? &path->extra->labels->label[0]
+						: NULL;
 			}
 
 			if (stream_empty(snlri))
@@ -1081,7 +1086,7 @@ void subgroup_default_update_packet(struct update_subgroup *subgrp,
 	struct bpacket_attr_vec_arr vecarr;
 	bool addpath_capable = false;
 	mpls_label_t label = MPLS_LABEL_IMPLICIT_NULL;
-	uint32_t num_labels = 0;
+	uint8_t num_labels = 0;
 
 	if (DISABLE_BGP_ANNOUNCE)
 		return;

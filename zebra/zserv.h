@@ -31,9 +31,6 @@ extern "C" {
 
 struct zebra_vrf;
 
-/* Default port information. */
-#define ZEBRA_VTY_PORT                2601
-
 /* Default configuration filename. */
 #define DEFAULT_CONFIG_FILE "zebra.conf"
 
@@ -67,6 +64,8 @@ struct client_gr_info {
 	/* Book keeping */
 	void *stale_client_ptr;
 	struct event *t_stale_removal;
+	void *client_ptr;
+	time_t route_sync_done_time;
 
 	TAILQ_ENTRY(client_gr_info) gr_info;
 };
@@ -121,7 +120,7 @@ struct zserv {
 	vrf_bitmap_t ridinfo[AFI_MAX];
 
 	/* Router-id information. */
-	vrf_bitmap_t nhrp_neighinfo[AFI_MAX];
+	vrf_bitmap_t neighinfo[AFI_MAX];
 
 	bool notify_owner;
 
@@ -381,6 +380,7 @@ __attribute__((__noreturn__)) void zebra_finalize(struct event *event);
 /*
  * Graceful restart functions.
  */
+extern void zebra_gr_client_final_shutdown(struct zserv *client);
 extern int zebra_gr_client_disconnect(struct zserv *client);
 extern void zebra_gr_client_reconnect(struct zserv *client);
 extern void zebra_gr_stale_client_cleanup(struct list *client_list);

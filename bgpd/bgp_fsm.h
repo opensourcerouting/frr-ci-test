@@ -122,6 +122,9 @@ extern void bgp_maxmed_update(struct bgp *);
 extern bool bgp_maxmed_onstartup_configured(struct bgp *);
 extern bool bgp_maxmed_onstartup_active(struct bgp *);
 extern int bgp_fsm_error_subcode(int status);
+extern enum bgp_fsm_state_progress
+bgp_stop_with_notify(struct peer_connection *connection, uint8_t code,
+		     uint8_t sub_code);
 
 /**
  * Start the route advertisement timer (that honors MRAI) for all the
@@ -143,11 +146,12 @@ extern void bgp_adjust_routeadv(struct peer *);
 DECLARE_HOOK(peer_backward_transition, (struct peer *peer), (peer));
 DECLARE_HOOK(peer_established, (struct peer *peer), (peer));
 
-int bgp_gr_update_all(struct bgp *bgp, int global_gr_cmd);
-int bgp_neighbor_graceful_restart(struct peer *peer, int peer_gr_cmd);
-unsigned int bgp_peer_gr_action(struct peer *peer,
-		int old_peer_state, int new_peer_state);
-void bgp_peer_move_to_gr_mode(struct peer *peer, int new_state);
+int bgp_gr_update_all(struct bgp *bgp, enum global_gr_command global_gr_cmd);
+int bgp_neighbor_graceful_restart(struct peer *peer,
+				  enum peer_gr_command peer_gr_cmd);
+unsigned int bgp_peer_gr_action(struct peer *peer, enum peer_mode old_peer_state,
+				enum peer_mode new_peer_state);
+void bgp_peer_move_to_gr_mode(struct peer *peer, enum peer_mode new_state);
 unsigned int bgp_peer_gr_helper_enable(struct peer *peer);
 unsigned int bgp_peer_gr_enable(struct peer *peer);
 unsigned int bgp_peer_gr_global_inherit(struct peer *peer);
@@ -156,9 +160,6 @@ enum peer_mode bgp_peer_gr_mode_get(struct peer *peer);
 enum global_mode bgp_global_gr_mode_get(struct bgp *bgp);
 enum peer_mode bgp_get_peer_gr_mode_from_flags(struct peer *peer);
 unsigned int bgp_peer_gr_global_inherit_unset(struct peer *peer);
-int bgp_gr_lookup_n_update_all_peer(struct bgp *bgp,
-		enum global_mode global_new_state,
-		enum global_mode global_old_state);
 void bgp_peer_gr_flags_update(struct peer *peer);
 const char *print_peer_gr_mode(enum peer_mode pr_mode);
 const char *print_peer_gr_cmd(enum peer_gr_command pr_gr_cmd);

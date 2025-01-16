@@ -14,9 +14,19 @@
 					"phy-address": "rubout"
 				},
 				"frr-zebra:zebra": {
+					"ipv4-addrs": [
+						{
+							"ip": "1.1.1.1",
+							"prefix-length": 24
+						}
+					],
+					"evpn-mh": {
+						"df-preference": 32767
+					},
 					"state": {
 						"up-count": 0,
-						"down-count": 0
+						"down-count": 0,
+						"zif-type": "zif-veth"
 					}
 				}
 			}

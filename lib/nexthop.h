@@ -240,8 +240,8 @@ extern struct nexthop *nexthop_dup(const struct nexthop *nexthop,
 extern struct nexthop *nexthop_dup_no_recurse(const struct nexthop *nexthop,
 					      struct nexthop *rparent);
 
-/* Check nexthop of IFINDEX type */
-extern bool nexthop_is_ifindex_type(const struct nexthop *nh);
+/* Is this nexthop a blackhole? */
+extern bool nexthop_is_blackhole(const struct nexthop *nh);
 
 /*
  * Parse one or more backup index values, as comma-separated numbers,
@@ -251,6 +251,12 @@ extern bool nexthop_is_ifindex_type(const struct nexthop *nh);
  */
 int nexthop_str2backups(const char *str, int *num_backups,
 			uint8_t *backups);
+
+void nexthop_json_helper(json_object *json_nexthop,
+			 const struct nexthop *nexthop, bool display_vrfid,
+			 uint8_t rn_family);
+void nexthop_vty_helper(struct vty *vty, const struct nexthop *nexthop,
+			bool display_vrfid, uint8_t rn_family);
 
 #ifdef _FRR_ATTRIBUTE_PRINTFRR
 #pragma FRR printfrr_ext "%pNH"  (struct nexthop *)

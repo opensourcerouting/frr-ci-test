@@ -39,6 +39,13 @@ DEFINE_MTYPE_STATIC(ZEBRA, DP_NS, "DPlane NSes");
 #  define AOK 0
 #endif
 
+/*
+ * Dataplane API version. This must be updated when any incompatible changes
+ * are made. The minor version (at least) should be updated when new APIs
+ * are introduced.
+ */
+static uint32_t zdplane_version = MAKE_FRRVERSION(2, 0, 0);
+
 /* Control for collection of extra interface info with route updates; a plugin
  * can enable the extra info via a dplane api.
  */
@@ -664,6 +671,12 @@ neigh_update_internal(enum dplane_op_e op, const struct interface *ifp,
  * Public APIs
  */
 
+/* Access the dplane API version */
+uint32_t zebra_dplane_get_version(void)
+{
+	return zdplane_version;
+}
+
 /* Obtain thread_master for dataplane thread */
 struct event_loop *dplane_get_thread_master(void)
 {
@@ -954,6 +967,11 @@ struct zebra_dplane_ctx *dplane_ctx_dequeue(struct dplane_ctx_list_head *q)
 	struct zebra_dplane_ctx *ctx = dplane_ctx_list_pop(q);
 
 	return ctx;
+}
+
+uint32_t dplane_ctx_queue_count(struct dplane_ctx_list_head *q)
+{
+	return dplane_ctx_list_count(q);
 }
 
 /*
@@ -4297,6 +4315,10 @@ dplane_route_update_internal(struct route_node *rn,
 					continue;
 
 				if (CHECK_FLAG(nexthop->flags,
+					       NEXTHOP_FLAG_DUPLICATE))
+					continue;
+
+				if (CHECK_FLAG(nexthop->flags,
 					       NEXTHOP_FLAG_ACTIVE))
 					SET_FLAG(nexthop->flags,
 						 NEXTHOP_FLAG_FIB);
@@ -5981,6 +6003,14 @@ int dplane_show_helper(struct vty *vty, bool detailed)
 	vty_out(vty, "Zebra dataplane:\nRoute updates:            %"PRIu64"\n",
 		incoming);
 	vty_out(vty, "Route update errors:      %"PRIu64"\n", errs);
+
+	incoming = atomic_load_explicit(&zdplane_info.dg_nexthops_in,
+					memory_order_relaxed);
+	errs = atomic_load_explicit(&zdplane_info.dg_nexthop_errors,
+				    memory_order_relaxed);
+	vty_out(vty, "Nexthop updates:          %" PRIu64 "\n", incoming);
+	vty_out(vty, "Nexthop update errors:    %" PRIu64 "\n", errs);
+
 	vty_out(vty, "Other errors       :      %"PRIu64"\n", other_errs);
 	vty_out(vty, "Route update queue limit: %"PRIu64"\n", limit);
 	vty_out(vty, "Route update queue depth: %"PRIu64"\n", queued);
@@ -6351,7 +6381,7 @@ dplane_provider_dequeue_out_ctx(struct zebra_dplane_provider *prov)
  */
 bool dplane_provider_is_threaded(const struct zebra_dplane_provider *prov)
 {
-	return (prov->dp_flags & DPLANE_PROV_FLAG_THREADED);
+	return CHECK_FLAG(prov->dp_flags, DPLANE_PROV_FLAG_THREADED);
 }
 
 #ifdef HAVE_NETLINK
@@ -7427,6 +7457,11 @@ static void dplane_thread_loop(struct event *event)
 		if (IS_ZEBRA_DEBUG_DPLANE_DETAIL)
 			zlog_debug("dplane dequeues %d completed work from provider %s",
 				   counter, dplane_provider_get_name(prov));
+
+		if (event_should_yield(event)) {
+			reschedule = true;
+			break;
+		}
 
 		/* Locate next provider */
 		prov = dplane_prov_list_next(&zdplane_info.dg_providers, prov);

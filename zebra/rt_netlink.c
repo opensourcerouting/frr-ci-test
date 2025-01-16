@@ -1550,7 +1550,7 @@ static ssize_t fill_seg6ipt_encap(char *buffer, size_t buflen,
 	srh->first_segment = segs->num_segs - 1;
 
 	for (i = 0; i < segs->num_segs; i++) {
-		memcpy(&srh->segments[i], &segs->seg[i],
+		memcpy(&srh->segments[segs->num_segs - i - 1], &segs->seg[i],
 		       sizeof(struct in6_addr));
 	}
 
@@ -1683,6 +1683,16 @@ static bool _netlink_route_build_singlepath(const struct prefix *p,
 						 sizeof(struct in_addr)))
 					return false;
 				break;
+			case ZEBRA_SEG6_LOCAL_ACTION_END_DX6:
+				if (!nl_attr_put32(nlmsg, req_size,
+						   SEG6_LOCAL_ACTION,
+						   SEG6_LOCAL_ACTION_END_DX6))
+					return false;
+				if (!nl_attr_put(nlmsg, req_size,
+						 SEG6_LOCAL_NH6, &ctx->nh6,
+						 sizeof(struct in_addr)))
+					return false;
+				break;
 			case ZEBRA_SEG6_LOCAL_ACTION_END_DT6:
 				if (!nl_attr_put32(nlmsg, req_size,
 						   SEG6_LOCAL_ACTION,
@@ -1714,7 +1724,6 @@ static bool _netlink_route_build_singlepath(const struct prefix *p,
 					return false;
 				break;
 			case ZEBRA_SEG6_LOCAL_ACTION_END_DX2:
-			case ZEBRA_SEG6_LOCAL_ACTION_END_DX6:
 			case ZEBRA_SEG6_LOCAL_ACTION_END_B6:
 			case ZEBRA_SEG6_LOCAL_ACTION_END_B6_ENCAP:
 			case ZEBRA_SEG6_LOCAL_ACTION_END_BM:
@@ -1882,6 +1891,36 @@ static inline bool _netlink_set_tag(struct nlmsghdr *n, unsigned int maxlen,
 	return true;
 }
 
+/*
+ * The function returns true if the attribute could be added
+ * to the message, otherwise false is returned.
+ */
+static int netlink_route_nexthop_encap(bool fpm, struct nlmsghdr *n,
+				       size_t nlen, const struct nexthop *nh)
+{
+	struct rtattr *nest;
+
+	if (!fpm)
+		return true;
+
+	switch (nh->nh_encap_type) {
+	case NET_VXLAN:
+		if (!nl_attr_put16(n, nlen, RTA_ENCAP_TYPE, nh->nh_encap_type))
+			return false;
+
+		nest = nl_attr_nest(n, nlen, RTA_ENCAP);
+		if (!nest)
+			return false;
+
+		if (!nl_attr_put32(n, nlen, 0 /* VXLAN_VNI */, nh->nh_encap.vni))
+			return false;
+		nl_attr_nest_end(n, nest);
+		break;
+	}
+
+	return true;
+}
+
 /* This function takes a nexthop as argument and
  * appends to the given netlink msg. If the nexthop
  * defines a preferred source, the src parameter
@@ -1900,10 +1939,13 @@ static inline bool _netlink_set_tag(struct nlmsghdr *n, unsigned int maxlen,
  * The function returns true if the nexthop could be added
  * to the message, otherwise false is returned.
  */
-static bool _netlink_route_build_multipath(
-	const struct prefix *p, const char *routedesc, int bytelen,
-	const struct nexthop *nexthop, struct nlmsghdr *nlmsg, size_t req_size,
-	struct rtmsg *rtmsg, const union g_addr **src, route_tag_t tag)
+static bool _netlink_route_build_multipath(const struct prefix *p,
+					   const char *routedesc, int bytelen,
+					   const struct nexthop *nexthop,
+					   struct nlmsghdr *nlmsg,
+					   size_t req_size, struct rtmsg *rtmsg,
+					   const union g_addr **src,
+					   route_tag_t tag, bool fpm)
 {
 	char label_buf[256];
 	struct vrf *vrf;
@@ -2011,6 +2053,13 @@ static bool _netlink_route_build_multipath(
 	if (!_netlink_set_tag(nlmsg, req_size, tag))
 		return false;
 
+	/*
+	 * Add encapsulation information when installing via
+	 * FPM.
+	 */
+	if (!netlink_route_nexthop_encap(fpm, nlmsg, req_size, nexthop))
+		return false;
+
 	nl_attr_rtnh_end(nlmsg, rtnh);
 	return true;
 }
@@ -2045,7 +2094,7 @@ _netlink_mpls_build_multipath(const struct prefix *p, const char *routedesc,
 	bytelen = (family == AF_INET ? 4 : 16);
 	return _netlink_route_build_multipath(p, routedesc, bytelen,
 					      nhlfe->nexthop, nlmsg, req_size,
-					      rtmsg, src, 0);
+					      rtmsg, src, 0, false);
 }
 
 static void _netlink_mpls_debug(int cmd, uint32_t label, const char *routedesc)
@@ -2138,34 +2187,6 @@ static bool nexthop_set_src(const struct nexthop *nexthop, int family,
 	}
 
 	return false;
-}
-
-/*
- * The function returns true if the attribute could be added
- * to the message, otherwise false is returned.
- */
-static int netlink_route_nexthop_encap(struct nlmsghdr *n, size_t nlen,
-				       struct nexthop *nh)
-{
-	struct rtattr *nest;
-
-	switch (nh->nh_encap_type) {
-	case NET_VXLAN:
-		if (!nl_attr_put16(n, nlen, RTA_ENCAP_TYPE, nh->nh_encap_type))
-			return false;
-
-		nest = nl_attr_nest(n, nlen, RTA_ENCAP);
-		if (!nest)
-			return false;
-
-		if (!nl_attr_put32(n, nlen, 0 /* VXLAN_VNI */,
-				   nh->nh_encap.vni))
-			return false;
-		nl_attr_nest_end(n, nest);
-		break;
-	}
-
-	return true;
 }
 
 /*
@@ -2360,6 +2381,14 @@ ssize_t netlink_route_multipath_msg_encode(int cmd, struct zebra_dplane_ctx *ctx
 				break;
 
 			setsrc = nexthop_set_src(nexthop, p->family, &src);
+			if (setsrc && IS_ZEBRA_DEBUG_KERNEL) {
+				if (p->family == AF_INET)
+					zlog_debug("%s: %pFX set src %pI4",
+						   __func__, p, &src.ipv4);
+				else if (p->family == AF_INET6)
+					zlog_debug("%s: %pFX set src %pI6",
+						   __func__, p, &src.ipv6);
+			}
 		}
 
 		if (setsrc) {
@@ -2402,6 +2431,16 @@ ssize_t netlink_route_multipath_msg_encode(int cmd, struct zebra_dplane_ctx *ctx
 
 				setsrc = nexthop_set_src(nexthop, p->family,
 							 &src);
+				if (setsrc && IS_ZEBRA_DEBUG_KERNEL) {
+					if (p->family == AF_INET)
+						zlog_debug("%s: %pFX set src %pI4",
+							   __func__, p,
+							   &src.ipv4);
+					else if (p->family == AF_INET6)
+						zlog_debug("%s: %pFX set src %pI6",
+							   __func__, p,
+							   &src.ipv6);
+				}
 				continue;
 			}
 
@@ -2422,12 +2461,10 @@ ssize_t netlink_route_multipath_msg_encode(int cmd, struct zebra_dplane_ctx *ctx
 				 * Add encapsulation information when
 				 * installing via FPM.
 				 */
-				if (fpm) {
-					if (!netlink_route_nexthop_encap(&req->n,
-									 datalen,
-									 nexthop))
-						return 0;
-				}
+				if (!netlink_route_nexthop_encap(fpm, &req->n,
+								 datalen,
+								 nexthop))
+					return 0;
 
 				nexthop_num++;
 				break;
@@ -2463,6 +2500,16 @@ ssize_t netlink_route_multipath_msg_encode(int cmd, struct zebra_dplane_ctx *ctx
 
 				setsrc = nexthop_set_src(nexthop, p->family,
 							 &src);
+				if (setsrc && IS_ZEBRA_DEBUG_KERNEL) {
+					if (p->family == AF_INET)
+						zlog_debug("%s: %pFX set src %pI4",
+							   __func__, p,
+							   &src.ipv4);
+					else if (p->family == AF_INET6)
+						zlog_debug("%s: %pFX set src %pI6",
+							   __func__, p,
+							   &src.ipv6);
+				}
 				continue;
 			}
 
@@ -2472,21 +2519,15 @@ ssize_t netlink_route_multipath_msg_encode(int cmd, struct zebra_dplane_ctx *ctx
 						    : "multipath";
 				nexthop_num++;
 
-				if (!_netlink_route_build_multipath(
-					    p, routedesc, bytelen, nexthop,
-					    &req->n, datalen, &req->r, &src1,
-					    tag))
+				if (!_netlink_route_build_multipath(p, routedesc,
+								    bytelen,
+								    nexthop,
+								    &req->n,
+								    datalen,
+								    &req->r,
+								    &src1, tag,
+								    fpm))
 					return 0;
-
-				/*
-				 * Add encapsulation information when installing via
-				 * FPM.
-				 */
-				if (fpm) {
-					if (!netlink_route_nexthop_encap(
-						    &req->n, datalen, nexthop))
-						return 0;
-				}
 
 				if (!setsrc && src1) {
 					if (p->family == AF_INET)
@@ -2929,6 +2970,18 @@ ssize_t netlink_nexthop_msg_encode(uint16_t cmd,
 						    &req->n, buflen,
 						    SEG6_LOCAL_NH4, &ctx->nh4,
 						    sizeof(struct in_addr)))
+							return 0;
+						break;
+					case SEG6_LOCAL_ACTION_END_DX6:
+						if (!nl_attr_put32(&req->n,
+								   buflen,
+								   SEG6_LOCAL_ACTION,
+								   SEG6_LOCAL_ACTION_END_DX6))
+							return 0;
+						if (!nl_attr_put(&req->n, buflen,
+								 SEG6_LOCAL_NH6,
+								 &ctx->nh6,
+								 sizeof(struct in_addr)))
 							return 0;
 						break;
 					case SEG6_LOCAL_ACTION_END_DT6:
@@ -4242,11 +4295,11 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 	 * - struct ethaddr mac; (for NEW)
 	 */
 	if (h->nlmsg_type == RTM_NEWNEIGH)
-		cmd = ZEBRA_NHRP_NEIGH_ADDED;
+		cmd = ZEBRA_NEIGH_ADDED;
 	else if (h->nlmsg_type == RTM_GETNEIGH)
-		cmd = ZEBRA_NHRP_NEIGH_GET;
+		cmd = ZEBRA_NEIGH_GET;
 	else if (h->nlmsg_type == RTM_DELNEIGH)
-		cmd = ZEBRA_NHRP_NEIGH_REMOVED;
+		cmd = ZEBRA_NEIGH_REMOVED;
 	else {
 		zlog_debug("%s(): unknown nlmsg type %u", __func__,
 			   h->nlmsg_type);
@@ -4256,20 +4309,18 @@ static int netlink_ipneigh_change(struct nlmsghdr *h, int len, ns_id_t ns_id)
 		/* copy LLADDR information */
 		l2_len = RTA_PAYLOAD(tb[NDA_LLADDR]);
 	}
-	if (l2_len == IPV4_MAX_BYTELEN || l2_len == 0) {
-		union sockunion link_layer_ipv4;
 
-		if (l2_len) {
-			sockunion_family(&link_layer_ipv4) = AF_INET;
-			memcpy((void *)sockunion_get_addr(&link_layer_ipv4),
-			       RTA_DATA(tb[NDA_LLADDR]), l2_len);
-		} else
-			sockunion_family(&link_layer_ipv4) = AF_UNSPEC;
-		zsend_nhrp_neighbor_notify(
-			cmd, ifp, &ip,
-			netlink_nbr_entry_state_to_zclient(ndm->ndm_state),
-			&link_layer_ipv4);
-	}
+	union sockunion link_layer_ipv4;
+
+	if (l2_len) {
+		sockunion_family(&link_layer_ipv4) = AF_INET;
+		memcpy((void *)sockunion_get_addr(&link_layer_ipv4),
+		       RTA_DATA(tb[NDA_LLADDR]), l2_len);
+	} else
+		sockunion_family(&link_layer_ipv4) = AF_UNSPEC;
+	zsend_neighbor_notify(cmd, ifp, &ip,
+			      netlink_nbr_entry_state_to_zclient(ndm->ndm_state),
+			      &link_layer_ipv4, l2_len);
 
 	if (h->nlmsg_type == RTM_GETNEIGH)
 		return 0;

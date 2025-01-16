@@ -161,6 +161,9 @@ enum node_type {
 	SRV6_LOCS_NODE,		 /* SRv6 locators node */
 	SRV6_LOC_NODE,		 /* SRv6 locator node */
 	SRV6_ENCAP_NODE,		 /* SRv6 encapsulation node */
+	SRV6_SID_FORMATS_NODE,		 /* SRv6 SID formats config node */
+	SRV6_SID_FORMAT_USID_F3216_NODE,		 /* SRv6 uSID f3216 format config node */
+	SRV6_SID_FORMAT_UNCOMPRESSED_F4024_NODE,		 /* SRv6 uncompressed f4024 format config node */
 	VTY_NODE,		 /* Vty node. */
 	FPM_NODE,		 /* Dataplane FPM node. */
 	LINK_PARAMS_NODE,	/* Link-parameters node */
@@ -178,6 +181,9 @@ enum node_type {
 	ISIS_SRV6_NODE,    /* ISIS SRv6 node */
 	ISIS_SRV6_NODE_MSD_NODE,    /* ISIS SRv6 Node MSDs node */
 	MGMTD_NODE,		 /* MGMTD node. */
+	RPKI_VRF_NODE,  /* RPKI node for VRF */
+	PIM_NODE,		 /* PIM protocol mode */
+	PIM6_NODE,		 /* PIM protocol for IPv6 mode */
 	NODE_TYPE_MAX, /* maximum */
 };
 /* clang-format on */
@@ -246,9 +252,11 @@ struct cmd_node {
 /* Argc max counts. */
 #define CMD_ARGC_MAX   256
 
+/* clang-format off */
+
 /* helper defines for end-user DEFUN* macros */
 #define DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attrs, dnum)     \
-	static const struct cmd_element cmdname = {                            \
+	const struct cmd_element cmdname = {                                   \
 		.string = cmdstr,                                              \
 		.func = funcname,                                              \
 		.doc = helpstr,                                                \
@@ -275,7 +283,7 @@ struct cmd_node {
 /* DEFPY variants */
 
 #define DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr, attr)                   \
-	DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr, 0)         \
+	static DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr, 0)  \
 	funcdecl_##funcname
 
 #define DEFPY(funcname, cmdname, cmdstr, helpstr)                              \
@@ -290,6 +298,10 @@ struct cmd_node {
 #define DEFPY_YANG(funcname, cmdname, cmdstr, helpstr)                         \
 	DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr, CMD_ATTR_YANG)
 
+#define DEFPY_YANG_HIDDEN(funcname, cmdname, cmdstr, helpstr)                  \
+	DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr,                         \
+		   CMD_ATTR_YANG | CMD_ATTR_HIDDEN)
+
 #define DEFPY_YANG_NOSH(funcname, cmdname, cmdstr, helpstr)                    \
 	DEFPY_ATTR(funcname, cmdname, cmdstr, helpstr,                         \
 		   CMD_ATTR_YANG | CMD_ATTR_NOSH)
@@ -298,7 +310,7 @@ struct cmd_node {
 
 #define DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr, attr)                   \
 	DEFUN_CMD_FUNC_DECL(funcname)                                          \
-	DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr, 0)         \
+	static DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr, 0)  \
 	DEFUN_CMD_FUNC_TEXT(funcname)
 
 #define DEFUN(funcname, cmdname, cmdstr, helpstr)                              \
@@ -313,6 +325,10 @@ struct cmd_node {
 /* DEFUN_NOSH for commands that vtysh should ignore */
 #define DEFUN_NOSH(funcname, cmdname, cmdstr, helpstr)                         \
 	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr, CMD_ATTR_NOSH)
+
+#define DEFUN_YANG_HIDDEN(funcname, cmdname, cmdstr, helpstr)                  \
+	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr,                         \
+		   CMD_ATTR_YANG | CMD_ATTR_HIDDEN)
 
 #define DEFUN_YANG_NOSH(funcname, cmdname, cmdstr, helpstr)                    \
 	DEFUN_ATTR(funcname, cmdname, cmdstr, helpstr,                         \
@@ -331,7 +347,8 @@ struct cmd_node {
 /* DEFUN + DEFSH */
 #define DEFUNSH_ATTR(daemon, funcname, cmdname, cmdstr, helpstr, attr)         \
 	DEFUN_CMD_FUNC_DECL(funcname)                                          \
-	DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr, daemon)    \
+	static DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr,     \
+				 daemon)                                       \
 	DEFUN_CMD_FUNC_TEXT(funcname)
 
 #define DEFUNSH(daemon, funcname, cmdname, cmdstr, helpstr)                    \
@@ -343,7 +360,7 @@ struct cmd_node {
 
 /* ALIAS macro which define existing command's alias. */
 #define ALIAS_ATTR(funcname, cmdname, cmdstr, helpstr, attr)                   \
-	DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr, 0)
+	static DEFUN_CMD_ELEMENT(funcname, cmdname, cmdstr, helpstr, attr, 0)
 
 #define ALIAS(funcname, cmdname, cmdstr, helpstr)                              \
 	ALIAS_ATTR(funcname, cmdname, cmdstr, helpstr, 0)
@@ -361,6 +378,8 @@ struct cmd_node {
 
 #define ALIAS_YANG(funcname, cmdname, cmdstr, helpstr)                         \
 	ALIAS_ATTR(funcname, cmdname, cmdstr, helpstr, CMD_ATTR_YANG)
+
+/* clang-format on */
 
 /* Some macroes */
 
@@ -453,6 +472,8 @@ struct cmd_node {
 #define MPLS_LDP_SYNC_HOLDDOWN_STR                                             \
 	"Time to wait for LDP-SYNC to occur before restoring if cost\n"
 #define NO_MPLS_LDP_SYNC_HOLDDOWN_STR "holddown timer disable\n"
+#define BGP_AF_STR "Address Family\n"
+#define BGP_AF_MODIFIER_STR "Address Family modifier\n"
 
 /* Command warnings. */
 #define NO_PASSWD_CMD_WARNING                                                  \
@@ -627,6 +648,7 @@ extern void cmd_banner_motd_line(const char *line);
 
 struct cmd_variable_handler {
 	const char *tokenname, *varname;
+	const char *xpath;	/* fill comps from set of values at xpath */
 	void (*completions)(vector out, struct cmd_token *token);
 };
 

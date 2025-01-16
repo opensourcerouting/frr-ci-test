@@ -39,12 +39,15 @@
 #include "libfrr.h"
 #include "frrstr.h"
 #include "lib_errors.h"
+#include <libyang/version.h>
 #include "northbound_cli.h"
 #include "printfrr.h"
 #include "json.h"
 
 #include <arpa/telnet.h>
 #include <termios.h>
+
+#include "lib/config_paths.h"
 
 #include "lib/vty_clippy.c"
 
@@ -124,6 +127,13 @@ bool vty_log_commands;
 static bool vty_log_commands_perm;
 
 char const *const mgmt_daemons[] = {
+	"zebra",
+#ifdef HAVE_RIPD
+	"ripd",
+#endif
+#ifdef HAVE_RIPNGD
+	"ripngd",
+#endif
 #ifdef HAVE_STATICD
 	"staticd",
 #endif
@@ -169,10 +179,10 @@ void vty_mgmt_resume_response(struct vty *vty, int ret)
 		return;
 	}
 
-	MGMTD_FE_CLIENT_DBG("resuming CLI cmd after %s on vty session-id: %" PRIu64
-			    " with '%s'",
-			    vty->mgmt_req_pending_cmd, vty->mgmt_session_id,
-			    ret == CMD_SUCCESS ? "success" : "failed");
+	debug_fe_client("resuming CLI cmd after %s on vty session-id: %" PRIu64
+			" with '%s'",
+			vty->mgmt_req_pending_cmd, vty->mgmt_session_id,
+			ret == CMD_SUCCESS ? "success" : "failed");
 
 	vty->mgmt_req_pending_cmd = NULL;
 
@@ -378,6 +388,21 @@ int vty_json(struct vty *vty, struct json_object *json)
 int vty_json_no_pretty(struct vty *vty, struct json_object *json)
 {
 	return vty_json_helper(vty, json, JSON_C_TO_STRING_NOSLASHESCAPE);
+}
+
+
+void vty_json_key(struct vty *vty, const char *key, bool *first_key)
+{
+	vty_out(vty, "%s\"%s\":", *first_key ? "{" : ",", key);
+	*first_key = false;
+}
+
+void vty_json_close(struct vty *vty, bool first_key)
+{
+	if (first_key)
+		/* JSON was not opened */
+		vty_out(vty, "{");
+	vty_out(vty, "}\n");
 }
 
 void vty_json_empty(struct vty *vty, struct json_object *json)
@@ -2256,19 +2281,6 @@ bool mgmt_vty_read_configs(void)
 
 	snprintf(path, sizeof(path), "%s/mgmtd.conf", frr_sysconfdir);
 	confp = vty_open_config(path, config_default);
-	if (!confp) {
-		char *orig;
-
-		snprintf(path, sizeof(path), "%s/zebra.conf", frr_sysconfdir);
-		orig = XSTRDUP(MTYPE_TMP, host_config_get());
-
-		zlog_info("mgmtd: trying backup config file: %s", path);
-		confp = vty_open_config(path, config_default);
-
-		host_config_set(path);
-		XFREE(MTYPE_TMP, orig);
-	}
-
 	if (confp) {
 		zlog_info("mgmtd: reading config file: %s", path);
 
@@ -2406,10 +2418,9 @@ static void vtysh_read(struct event *thread)
 				 * we get response through callback.
 				 */
 				if (vty->mgmt_req_pending_cmd) {
-					MGMTD_FE_CLIENT_DBG(
-						"postpone CLI response pending mgmtd %s on vty session-id %" PRIu64,
-						vty->mgmt_req_pending_cmd,
-						vty->mgmt_session_id);
+					debug_fe_client("postpone CLI response pending mgmtd %s on vty session-id %" PRIu64,
+							vty->mgmt_req_pending_cmd,
+							vty->mgmt_session_id);
 					return;
 				}
 
@@ -2490,14 +2501,14 @@ void vty_close(struct vty *vty)
 	 * so warn the user.
 	 */
 	if (vty->mgmt_num_pending_setcfg)
-		MGMTD_FE_CLIENT_ERR(
+		log_err_fe_client(
 			"vty closed, uncommitted config will be lost.");
 
 	/* Drop out of configure / transaction if needed. */
 	vty_config_exit(vty);
 
 	if (mgmt_fe_client && vty->mgmt_session_id) {
-		MGMTD_FE_CLIENT_DBG("closing vty session");
+		debug_fe_client("closing vty session");
 		mgmt_fe_destroy_client_session(mgmt_fe_client,
 					       vty->mgmt_client_id);
 		vty->mgmt_session_id = 0;
@@ -3477,9 +3488,8 @@ void vty_init_vtysh(void)
 static void vty_mgmt_server_connected(struct mgmt_fe_client *client,
 				      uintptr_t usr_data, bool connected)
 {
-	MGMTD_FE_CLIENT_DBG("Got %sconnected %s MGMTD Frontend Server",
-			    !connected ? "dis: " : "",
-			    !connected ? "from" : "to");
+	debug_fe_client("Got %sconnected %s MGMTD Frontend Server",
+			!connected ? "dis: " : "", !connected ? "from" : "to");
 
 	/*
 	 * We should not have any sessions for connecting or disconnecting case.
@@ -3492,7 +3502,7 @@ static void vty_mgmt_server_connected(struct mgmt_fe_client *client,
 
 	/* Start or stop listening for vty connections */
 	if (connected)
-		frr_vty_serv_start();
+		frr_vty_serv_start(true);
 	else
 		frr_vty_serv_stop();
 }
@@ -3515,8 +3525,8 @@ static void vty_mgmt_session_notify(struct mgmt_fe_client *client,
 		return;
 	}
 
-	MGMTD_FE_CLIENT_DBG("%s session for client %" PRIu64 " successfully",
-			    create ? "Created" : "Destroyed", client_id);
+	debug_fe_client("%s session for client %" PRIu64 " successfully",
+			create ? "Created" : "Destroyed", client_id);
 
 	if (create) {
 		assert(session_id != 0);
@@ -3547,8 +3557,8 @@ static void vty_mgmt_ds_lock_notified(struct mgmt_fe_client *client,
 		zlog_err("%socking for DS %u failed, Err: '%s' vty %p",
 			 lock_ds ? "L" : "Unl", ds_id, errmsg_if_any, vty);
 	else {
-		MGMTD_FE_CLIENT_DBG("%socked DS %u successfully",
-				    lock_ds ? "L" : "Unl", ds_id);
+		debug_fe_client("%socked DS %u successfully",
+				lock_ds ? "L" : "Unl", ds_id);
 		if (ds_id == MGMTD_DS_CANDIDATE)
 			vty->mgmt_locked_candidate_ds = lock_ds;
 		else
@@ -3576,12 +3586,14 @@ static void vty_mgmt_set_config_result_notified(
 		zlog_err("SET_CONFIG request for client 0x%" PRIx64
 			 " failed, Error: '%s'",
 			 client_id, errmsg_if_any ? errmsg_if_any : "Unknown");
-		vty_out(vty, "ERROR: SET_CONFIG request failed, Error: %s\n",
-			errmsg_if_any ? errmsg_if_any : "Unknown");
+		vty_out(vty, "%% Configuration failed.\n\n");
+		if (errmsg_if_any)
+			vty_out(vty, "%s\n", errmsg_if_any);
 	} else {
-		MGMTD_FE_CLIENT_DBG("SET_CONFIG request for client 0x%" PRIx64
-				    " req-id %" PRIu64 " was successfull",
-				    client_id, req_id);
+		debug_fe_client("SET_CONFIG request for client 0x%" PRIx64
+				" req-id %" PRIu64 " was successfull%s%s",
+				client_id, req_id, errmsg_if_any ? ": " : "",
+				errmsg_if_any ?: "");
 	}
 
 	if (implicit_commit) {
@@ -3608,13 +3620,14 @@ static void vty_mgmt_commit_config_result_notified(
 		zlog_err("COMMIT_CONFIG request for client 0x%" PRIx64
 			 " failed, Error: '%s'",
 			 client_id, errmsg_if_any ? errmsg_if_any : "Unknown");
-		vty_out(vty, "ERROR: COMMIT_CONFIG request failed, Error: %s\n",
-			errmsg_if_any ? errmsg_if_any : "Unknown");
+		vty_out(vty, "%% Configuration failed.\n\n");
+		if (errmsg_if_any)
+			vty_out(vty, "%s\n", errmsg_if_any);
 	} else {
-		MGMTD_FE_CLIENT_DBG(
-			"COMMIT_CONFIG request for client 0x%" PRIx64
-			" req-id %" PRIu64 " was successfull",
-			client_id, req_id);
+		debug_fe_client("COMMIT_CONFIG request for client 0x%" PRIx64
+				" req-id %" PRIu64 " was successfull%s%s",
+				client_id, req_id, errmsg_if_any ? ": " : "",
+				errmsg_if_any ?: "");
 		if (errmsg_if_any)
 			vty_out(vty, "MGMTD: %s\n", errmsg_if_any);
 	}
@@ -3644,9 +3657,10 @@ static int vty_mgmt_get_data_result_notified(
 		return -1;
 	}
 
-	MGMTD_FE_CLIENT_DBG("GET_DATA request succeeded, client 0x%" PRIx64
-			    " req-id %" PRIu64,
-			    client_id, req_id);
+	debug_fe_client("GET_DATA request succeeded, client 0x%" PRIx64
+			" req-id %" PRIu64 "%s%s",
+			client_id, req_id, errmsg_if_any ? ": " : "",
+			errmsg_if_any ?: "");
 
 	if (req_id != mgmt_last_req_id) {
 		mgmt_last_req_id = req_id;
@@ -3675,15 +3689,24 @@ static ssize_t vty_mgmt_libyang_print(void *user_data, const void *buf,
 }
 
 static void vty_out_yang_error(struct vty *vty, LYD_FORMAT format,
-			       struct ly_err_item *ei)
+			       const struct ly_err_item *ei)
 {
+#if (LY_VERSION_MAJOR < 3)
+#define data_path path
+#else
+#define data_path data_path
+#endif
 	bool have_apptag = ei->apptag && ei->apptag[0] != 0;
-	bool have_path = ei->path && ei->path[0] != 0;
+	bool have_path = ei->data_path && ei->data_path[0] != 0;
 	bool have_msg = ei->msg && ei->msg[0] != 0;
 	const char *severity = NULL;
 	const char *evalid = NULL;
 	const char *ecode = NULL;
+#if (LY_VERSION_MAJOR < 3)
 	LY_ERR err = ei->no;
+#else
+	LY_ERR err = ei->err;
+#endif
 
 	if (ei->level == LY_LLERR)
 		severity = "error";
@@ -3708,7 +3731,8 @@ static void vty_out_yang_error(struct vty *vty, LYD_FORMAT format,
 			vty_out(vty, "<error-validation>%s</error-validation>\n",
 				evalid);
 		if (have_path)
-			vty_out(vty, "<error-path>%s</error-path>\n", ei->path);
+			vty_out(vty, "<error-path>%s</error-path>\n",
+				ei->data_path);
 		if (have_apptag)
 			vty_out(vty, "<error-app-tag>%s</error-app-tag>\n",
 				ei->apptag);
@@ -3727,7 +3751,7 @@ static void vty_out_yang_error(struct vty *vty, LYD_FORMAT format,
 		if (evalid)
 			vty_out(vty, ", \"error-validation\": \"%s\"", evalid);
 		if (have_path)
-			vty_out(vty, ", \"error-path\": \"%s\"", ei->path);
+			vty_out(vty, ", \"error-path\": \"%s\"", ei->data_path);
 		if (have_apptag)
 			vty_out(vty, ", \"error-app-tag\": \"%s\"", ei->apptag);
 		if (have_msg)
@@ -3744,18 +3768,19 @@ static void vty_out_yang_error(struct vty *vty, LYD_FORMAT format,
 		if (evalid)
 			vty_out(vty, " invalid: %s", evalid);
 		if (have_path)
-			vty_out(vty, " path: %s", ei->path);
+			vty_out(vty, " path: %s", ei->data_path);
 		if (have_apptag)
 			vty_out(vty, " app-tag: %s", ei->apptag);
 		if (have_msg)
 			vty_out(vty, " msg: %s", ei->msg);
 		break;
 	}
+#undef data_path
 }
 
 static uint vty_out_yang_errors(struct vty *vty, LYD_FORMAT format)
 {
-	struct ly_err_item *ei = ly_err_first(ly_native_ctx);
+	const struct ly_err_item *ei = ly_err_first(ly_native_ctx);
 	uint count;
 
 	if (!ei)
@@ -3792,10 +3817,9 @@ static int vty_mgmt_get_tree_result_notified(
 
 	vty = (struct vty *)session_ctx;
 
-	MGMTD_FE_CLIENT_DBG("GET_TREE request %ssucceeded, client 0x%" PRIx64
-			    " req-id %" PRIu64,
-			    partial_error ? "partially " : "", client_id,
-			    req_id);
+	debug_fe_client("GET_TREE request %ssucceeded, client 0x%" PRIx64
+			" req-id %" PRIu64,
+			partial_error ? "partially " : "", client_id, req_id);
 
 	assert(result_type == LYD_LYB ||
 	       result_type == vty->mgmt_req_pending_data);
@@ -3832,6 +3856,43 @@ static int vty_mgmt_get_tree_result_notified(
 	return 0;
 }
 
+static int vty_mgmt_edit_result_notified(struct mgmt_fe_client *client,
+					 uintptr_t user_data,
+					 uint64_t client_id, uint64_t session_id,
+					 uintptr_t session_ctx, uint64_t req_id,
+					 const char *xpath)
+{
+	struct vty *vty = (struct vty *)session_ctx;
+
+	debug_fe_client("EDIT request for client 0x%" PRIx64 " req-id %" PRIu64
+			" was successful, xpath: %s",
+			client_id, req_id, xpath);
+
+	vty_mgmt_resume_response(vty, CMD_SUCCESS);
+
+	return 0;
+}
+
+static int vty_mgmt_rpc_result_notified(struct mgmt_fe_client *client,
+					uintptr_t user_data, uint64_t client_id,
+					uint64_t session_id,
+					uintptr_t session_ctx, uint64_t req_id,
+					const char *result)
+{
+	struct vty *vty = (struct vty *)session_ctx;
+
+	debug_fe_client("RPC request for client 0x%" PRIx64 " req-id %" PRIu64
+			" was successful",
+			client_id, req_id);
+
+	if (result)
+		vty_out(vty, "%s\n", result);
+
+	vty_mgmt_resume_response(vty, CMD_SUCCESS);
+
+	return 0;
+}
+
 static int vty_mgmt_error_notified(struct mgmt_fe_client *client,
 				   uintptr_t user_data, uint64_t client_id,
 				   uint64_t session_id, uintptr_t session_ctx,
@@ -3842,21 +3903,20 @@ static int vty_mgmt_error_notified(struct mgmt_fe_client *client,
 	const char *cname = mgmt_fe_client_name(client);
 
 	if (!vty->mgmt_req_pending_cmd) {
-		MGMTD_FE_CLIENT_DBG("Erorr with no pending command: %d returned for client %s 0x%" PRIx64
-				    " session-id %" PRIu64 " req-id %" PRIu64
-				    "error-str %s",
-				    error, cname, client_id, session_id, req_id,
-				    errstr);
+		debug_fe_client("Erorr with no pending command: %d returned for client %s 0x%" PRIx64
+				" session-id %" PRIu64 " req-id %" PRIu64
+				"error-str %s",
+				error, cname, client_id, session_id, req_id,
+				errstr);
 		vty_out(vty,
 			"%% Error %d from MGMTD for %s with no pending command: %s\n",
 			error, cname, errstr);
 		return CMD_WARNING;
 	}
 
-	MGMTD_FE_CLIENT_DBG("Erorr %d returned for client %s 0x%" PRIx64
-			    " session-id %" PRIu64 " req-id %" PRIu64
-			    "error-str %s",
-			    error, cname, client_id, session_id, req_id, errstr);
+	debug_fe_client("Erorr %d returned for client %s 0x%" PRIx64
+			" session-id %" PRIu64 " req-id %" PRIu64 "error-str %s",
+			error, cname, client_id, session_id, req_id, errstr);
 
 	vty_out(vty, "%% %s (for %s, client %s)\n", errstr,
 		vty->mgmt_req_pending_cmd, cname);
@@ -3874,6 +3934,8 @@ static struct mgmt_fe_client_cbs mgmt_cbs = {
 	.commit_config_notify = vty_mgmt_commit_config_result_notified,
 	.get_data_notify = vty_mgmt_get_data_result_notified,
 	.get_tree_notify = vty_mgmt_get_tree_result_notified,
+	.edit_notify = vty_mgmt_edit_result_notified,
+	.rpc_notify = vty_mgmt_rpc_result_notified,
 	.error_notify = vty_mgmt_error_notified,
 
 };
@@ -4105,16 +4167,17 @@ int vty_mgmt_send_get_req(struct vty *vty, bool is_config,
 	return 0;
 }
 
-int vty_mgmt_send_get_data_req(struct vty *vty, LYD_FORMAT result_type,
-			       uint8_t flags, const char *xpath)
+int vty_mgmt_send_get_data_req(struct vty *vty, uint8_t datastore,
+			       LYD_FORMAT result_type, uint8_t flags,
+			       uint8_t defaults, const char *xpath)
 {
 	LYD_FORMAT intern_format = result_type;
 
 	vty->mgmt_req_id++;
 
 	if (mgmt_fe_send_get_data_req(mgmt_fe_client, vty->mgmt_session_id,
-				      vty->mgmt_req_id, intern_format, flags,
-				      xpath)) {
+				      vty->mgmt_req_id, datastore,
+				      intern_format, flags, defaults, xpath)) {
 		zlog_err("Failed to send GET-DATA to MGMTD session-id: %" PRIu64
 			 " req-id %" PRIu64 ".",
 			 vty->mgmt_session_id, vty->mgmt_req_id);
@@ -4124,6 +4187,47 @@ int vty_mgmt_send_get_data_req(struct vty *vty, LYD_FORMAT result_type,
 
 	vty->mgmt_req_pending_cmd = "MESSAGE_GET_DATA_REQ";
 	vty->mgmt_req_pending_data = result_type;
+
+	return 0;
+}
+
+int vty_mgmt_send_edit_req(struct vty *vty, uint8_t datastore,
+			   LYD_FORMAT request_type, uint8_t flags,
+			   uint8_t operation, const char *xpath,
+			   const char *data)
+{
+	vty->mgmt_req_id++;
+
+	if (mgmt_fe_send_edit_req(mgmt_fe_client, vty->mgmt_session_id,
+				  vty->mgmt_req_id, datastore, request_type,
+				  flags, operation, xpath, data)) {
+		zlog_err("Failed to send EDIT to MGMTD session-id: %" PRIu64
+			 " req-id %" PRIu64 ".",
+			 vty->mgmt_session_id, vty->mgmt_req_id);
+		vty_out(vty, "Failed to send EDIT to MGMTD!\n");
+		return -1;
+	}
+
+	vty->mgmt_req_pending_cmd = "MESSAGE_EDIT_REQ";
+
+	return 0;
+}
+
+int vty_mgmt_send_rpc_req(struct vty *vty, LYD_FORMAT request_type,
+			  const char *xpath, const char *data)
+{
+	vty->mgmt_req_id++;
+
+	if (mgmt_fe_send_rpc_req(mgmt_fe_client, vty->mgmt_session_id,
+				 vty->mgmt_req_id, request_type, xpath, data)) {
+		zlog_err("Failed to send RPC to MGMTD session-id: %" PRIu64
+			 " req-id %" PRIu64 ".",
+			 vty->mgmt_session_id, vty->mgmt_req_id);
+		vty_out(vty, "Failed to send RPC to MGMTD!\n");
+		return -1;
+	}
+
+	vty->mgmt_req_pending_cmd = "MESSAGE_RPC_REQ";
 
 	return 0;
 }

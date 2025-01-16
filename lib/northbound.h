@@ -99,6 +99,7 @@ enum nb_cb_operation {
 	NB_CB_GET_KEYS,
 	NB_CB_LOOKUP_ENTRY,
 	NB_CB_RPC,
+	NB_CB_NOTIFY,
 };
 
 union nb_resource {
@@ -273,17 +274,29 @@ struct nb_cb_rpc_args {
 	/* XPath of the YANG RPC or action. */
 	const char *xpath;
 
-	/* Read-only list of input parameters. */
-	const struct list *input;
+	/* Read-only "input" tree of the RPC/action. */
+	const struct lyd_node *input;
 
-	/* List of output parameters to be populated by the callback. */
-	struct list *output;
+	/* The "output" tree of the RPC/action to be populated by the callback. */
+	struct lyd_node *output;
 
 	/* Buffer to store human-readable error message in case of error. */
 	char *errmsg;
 
 	/* Size of errmsg. */
 	size_t errmsg_len;
+};
+
+struct nb_cb_notify_args {
+	/* XPath of the notification. */
+	const char *xpath;
+
+	/*
+	 * libyang data node representing the notification. If the notification
+	 * is not top-level, it still points to the notification node, but it's
+	 * part of the full data tree with all its parents.
+	 */
+	struct lyd_node *dnode;
 };
 
 /*
@@ -510,6 +523,17 @@ struct nb_callbacks {
 	int (*rpc)(struct nb_cb_rpc_args *args);
 
 	/*
+	 * Notification callback.
+	 *
+	 * The callback is called when a YANG notification is received.
+	 *
+	 * args
+	 *    Refer to the documentation comments of nb_cb_notify_args for
+	 *    details.
+	 */
+	void (*notify)(struct nb_cb_notify_args *args);
+
+	/*
 	 * Optional callback to compare the data nodes when printing
 	 * the CLI commands associated with them.
 	 *
@@ -597,11 +621,6 @@ struct nb_node {
 
 	/* Flags. */
 	uint8_t flags;
-
-#ifdef HAVE_CONFD
-	/* ConfD hash value corresponding to this YANG path. */
-	int confd_hash;
-#endif
 };
 /* The YANG container or list contains only config data. */
 #define F_NB_NODE_CONFIG_ONLY 0x01
@@ -627,6 +646,14 @@ struct frr_yang_module_info {
 	 * modules loaded in mgmtd.
 	 */
 	bool ignore_cfg_cbs;
+
+	/*
+	 * The NULL-terminated list of supported features.
+	 * Features are defined with "feature" statements in the YANG model.
+	 * Use ["*", NULL] to enable all features.
+	 * Use NULL to disable all features.
+	 */
+	const char **features;
 
 	/* Northbound callbacks. */
 	const struct {
@@ -668,7 +695,6 @@ enum nb_error {
 enum nb_client {
 	NB_CLIENT_NONE = 0,
 	NB_CLIENT_CLI,
-	NB_CLIENT_CONFD,
 	NB_CLIENT_SYSREPO,
 	NB_CLIENT_GRPC,
 	NB_CLIENT_PCEP,
@@ -771,6 +797,8 @@ typedef enum nb_error (*nb_oper_data_finish_cb)(const struct lyd_node *tree,
 /* Hooks. */
 DECLARE_HOOK(nb_notification_send, (const char *xpath, struct list *arguments),
 	     (xpath, arguments));
+DECLARE_HOOK(nb_notification_tree_send,
+	     (const char *xpath, const struct lyd_node *tree), (xpath, tree));
 DECLARE_HOOK(nb_client_debug_config_write, (struct vty *vty), (vty));
 DECLARE_HOOK(nb_client_debug_set_all, (uint32_t flags, bool set), (flags, set));
 
@@ -778,6 +806,7 @@ DECLARE_HOOK(nb_client_debug_set_all, (uint32_t flags, bool set), (flags, set));
 extern struct debug nb_dbg_cbs_config;
 extern struct debug nb_dbg_cbs_state;
 extern struct debug nb_dbg_cbs_rpc;
+extern struct debug nb_dbg_cbs_notify;
 extern struct debug nb_dbg_notif;
 extern struct debug nb_dbg_events;
 extern struct debug nb_dbg_libyang;
@@ -804,8 +833,10 @@ extern const void *nb_callback_lookup_next(const struct nb_node *nb_node,
 					   const void *parent_list_entry,
 					   const struct yang_list_keys *keys);
 extern int nb_callback_rpc(const struct nb_node *nb_node, const char *xpath,
-			   const struct list *input, struct list *output,
+			   const struct lyd_node *input, struct lyd_node *output,
 			   char *errmsg, size_t errmsg_len);
+extern void nb_callback_notify(const struct nb_node *nb_node, const char *xpath,
+			       struct lyd_node *dnode);
 
 /*
  * Create a northbound node for all YANG schema nodes.
@@ -968,6 +999,44 @@ extern int nb_candidate_edit(struct nb_config *candidate,
 			     const struct yang_data *data);
 
 /*
+ * Edit a candidate configuration. Value is given as JSON/XML.
+ *
+ * candidate
+ *    Candidate configuration to edit.
+ *
+ * operation
+ *    Operation to apply.
+ *
+ * format
+ *    LYD_FORMAT of the value.
+ *
+ * xpath
+ *    XPath of the configuration node being edited.
+ *    For create, it must be the parent.
+ *
+ * data
+ *    New data tree for the node.
+ *
+ * xpath_created
+ *    XPath of the created node if operation is "create".
+ *
+ * errmsg
+ *    Buffer to store human-readable error message in case of error.
+ *
+ * errmsg_len
+ *    Size of errmsg.
+ *
+ * Returns:
+ *    - NB_OK on success.
+ *    - NB_ERR for other errors.
+ */
+extern int nb_candidate_edit_tree(struct nb_config *candidate,
+				  enum nb_operation operation,
+				  LYD_FORMAT format, const char *xpath,
+				  const char *data, char *xpath_created,
+				  char *errmsg, size_t errmsg_len);
+
+/*
  * Create diff for configuration.
  *
  * dnode
@@ -1009,6 +1078,9 @@ extern bool nb_candidate_needs_update(const struct nb_config *candidate);
  * xpath_base
  *    Base xpath for config.
  *
+ * in_backend
+ *    Specify whether the changes are being applied in the backend or not.
+ *
  * err_buf
  *    Buffer to store human-readable error message in case of error.
  *
@@ -1018,11 +1090,18 @@ extern bool nb_candidate_needs_update(const struct nb_config *candidate);
  * error
  *    TRUE on error, FALSE on success
  */
-extern void nb_candidate_edit_config_changes(
-	struct nb_config *candidate_config, struct nb_cfg_change cfg_changes[],
-	size_t num_cfg_changes, const char *xpath_base, char *err_buf,
-	int err_bufsize, bool *error);
+extern void nb_candidate_edit_config_changes(struct nb_config *candidate_config,
+					     struct nb_cfg_change cfg_changes[],
+					     size_t num_cfg_changes,
+					     const char *xpath_base,
+					     bool in_backend, char *err_buf,
+					     int err_bufsize, bool *error);
 
+
+extern void nb_config_diff_add_change(struct nb_config_cbs *changes,
+				      enum nb_cb_operation operation,
+				      uint32_t *seq,
+				      const struct lyd_node *dnode);
 /*
  * Delete candidate configuration changes.
  *
@@ -1423,6 +1502,10 @@ extern bool nb_cb_operation_is_valid(enum nb_cb_operation operation,
 				     const struct lysc_node *snode);
 
 /*
+ * DEPRECATED: This call and infra should no longer be used. Instead,
+ * the mgmtd supported tree based call `nb_notification_tree_send` should be
+ * used instead
+ *
  * Send a YANG notification. This is a no-op unless the 'nb_notification_send'
  * hook was registered by a northbound plugin.
  *
@@ -1437,6 +1520,22 @@ extern bool nb_cb_operation_is_valid(enum nb_cb_operation operation,
  *    NB_OK on success, NB_ERR otherwise.
  */
 extern int nb_notification_send(const char *xpath, struct list *arguments);
+
+/*
+ * Send a YANG notification from a backend . This is a no-op unless th
+ * 'nb_notification_tree_send' hook was registered by a northbound plugin.
+ *
+ * xpath
+ *    XPath of the YANG notification.
+ *
+ * tree
+ *    The libyang tree for the notification.
+ *
+ * Returns:
+ *    NB_OK on success, NB_ERR otherwise.
+ */
+extern int nb_notification_tree_send(const char *xpath,
+				     const struct lyd_node *tree);
 
 /*
  * Associate a user pointer to a configuration node.

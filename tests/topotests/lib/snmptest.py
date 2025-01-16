@@ -85,15 +85,18 @@ class SnmpTester(object):
         return out_dict, out_list
 
     def get(self, oid):
-        cmd = "snmpget {0} {1}".format(self._snmp_config(), oid)
-
+        cmd = "snmpget {0} {1} 2>&1 | grep -v SNMPv2-PDU".format(
+            self._snmp_config(), oid
+        )
         result = self.router.cmd(cmd)
         if "not found" in result:
             return None
         return self._get_snmp_value(result)
 
     def get_next(self, oid):
-        cmd = "snmpgetnext {0} {1}".format(self._snmp_config(), oid)
+        cmd = "snmpgetnext {0} {1} 2>&1 | grep -v SNMPv2-PDU".format(
+            self._snmp_config(), oid
+        )
 
         result = self.router.cmd(cmd)
         print("get_next: {}".format(result))
@@ -102,7 +105,9 @@ class SnmpTester(object):
         return self._get_snmp_value(result)
 
     def walk(self, oid):
-        cmd = "snmpwalk {0} {1}".format(self._snmp_config(), oid)
+        cmd = "snmpwalk {0} {1} 2>&1 | grep -v SNMPv2-PDU".format(
+            self._snmp_config(), oid
+        )
 
         result = self.router.cmd(cmd)
         return self._parse_multiline(result)
@@ -213,14 +218,15 @@ class SnmpTester(object):
         return False
 
     def get_notif_bgp4(self, output_file):
+        notifs = []
         notif_list = []
         whitecleanfile = re.sub("\t", " ", output_file)
         results = whitecleanfile.strip().split("\n")
 
-        # don't consider SNMP additional messages
-        notifs_first = [elem for elem in results if not ("SNMP" in elem)]
-        # don't consider additional application messages
-        notifs = [elem for index, elem in enumerate(notifs_first) if index % 2 != 0]
+        # don't consider additional SNMP or application messages
+        for result in results:
+            if re.search(r"(\.([0-9]+))+\s", result):
+                notifs.append(result)
 
         oid_v4 = r"1\.3\.6\.1\.2\.1\.15"
         for one_notif in notifs:
@@ -232,14 +238,15 @@ class SnmpTester(object):
         return notif_list
 
     def get_notif_bgp4v2(self, output_file):
+        notifs = []
         notif_list = []
         whitecleanfile = re.sub("\t", " ", output_file)
         results = whitecleanfile.strip().split("\n")
 
-        # don't consider SNMP additional messages
-        notifs_first = [elem for elem in results if not ("SNMP" in elem)]
-        # don't consider additional application messages
-        notifs = [elem for index, elem in enumerate(results) if index % 2 != 0]
+        # don't consider additional SNMP or application messages
+        for result in results:
+            if re.search(r"(\.([0-9]+))+\s", result):
+                notifs.append(result)
 
         oid_v6 = r"1\.3\.6\.1\.3\.5\.1"
         for one_notif in notifs:

@@ -37,8 +37,6 @@ from lib import topotest
 # Required to instantiate the topology builder class.
 from lib.topogen import Topogen, TopoRouter, get_topogen
 
-pytestmark = [pytest.mark.bgpd, pytest.mark.pimd]
-
 #####################################################
 ##
 ##   Network Topology Definition
@@ -264,7 +262,7 @@ def config_bridge(node):
     node.run("ip link set dev bridge type bridge mcast_snooping 0")
     node.run("ip link set dev bridge type bridge vlan_stats_enabled 1")
     node.run("ip link set dev bridge up")
-    node.run("/sbin/bridge vlan add vid 1000 dev bridge")
+    node.run("/sbin/bridge vlan add vid 1000 dev bridge self")
 
 
 def config_vxlan(node, node_ip):
@@ -389,13 +387,6 @@ def setup_module(module):
     tors.append("torm22")
     config_tors(tgen, tors)
 
-    hosts = []
-    hosts.append("hostd11")
-    hosts.append("hostd12")
-    hosts.append("hostd21")
-    hosts.append("hostd22")
-    config_hosts(tgen, hosts)
-
     # tgen.mininet_cli()
     # This is a sample of configuration loading.
     router_list = tgen.routers()
@@ -410,6 +401,13 @@ def setup_module(module):
             TopoRouter.RD_BGP, os.path.join(CWD, "{}/evpn.conf".format(rname))
         )
     tgen.start_router()
+
+    hosts = []
+    hosts.append("hostd11")
+    hosts.append("hostd12")
+    hosts.append("hostd21")
+    hosts.append("hostd22")
+    config_hosts(tgen, hosts)
     # tgen.mininet_cli()
 
 
@@ -457,7 +455,7 @@ def check_remote_es(esi, vtep_ips, dut_name, down_vteps):
     else:
         tor_ips_rack = tor_ips_rack_1
 
-    for tor_name, tor_ip in tor_ips_rack.items():
+    for _, tor_ip in tor_ips_rack.items():
         remote_ips.append(tor_ip)
 
     # remove down VTEPs from the remote check list
@@ -634,6 +632,7 @@ def check_mac(dut, vni, mac, m_type, esi, intf, ping_gw=False, tgen=None):
 
     out = dut.vtysh_cmd("show evpn mac vni %d mac %s json" % (vni, mac))
 
+    tmp_esi = None
     mac_js = json.loads(out)
     for mac, info in mac_js.items():
         tmp_esi = info.get("esi", "")
@@ -642,7 +641,15 @@ def check_mac(dut, vni, mac, m_type, esi, intf, ping_gw=False, tgen=None):
         if tmp_esi == esi and tmp_m_type == m_type and intf == intf:
             return None
 
-    return "invalid vni %d mac %s out %s" % (vni, mac, mac_js)
+    return "invalid vni %d mac %s expected esi %s, %s m_type %s and intf %s out %s" % (
+        vni,
+        mac,
+        tmp_esi,
+        esi,
+        m_type,
+        intf,
+        mac_js,
+    )
 
 
 def test_evpn_mac():

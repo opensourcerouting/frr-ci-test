@@ -5,6 +5,7 @@
 
 #include <zebra.h>
 
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -364,8 +365,7 @@ int main(int argc, char **argv, char **env)
 
 	strlcpy(sysconfdir, frr_sysconfdir, sizeof(sysconfdir));
 
-	frr_init_vtydir();
-	strlcpy(vtydir, frr_vtydir, sizeof(vtydir));
+	strlcpy(vtydir, frr_runstatedir, sizeof(vtydir));
 
 	/* Option handling. */
 	while (1) {
@@ -489,7 +489,6 @@ int main(int argc, char **argv, char **env)
 
 	/* Make vty structure and register commands. */
 	vtysh_init_vty();
-	vtysh_init_cmd();
 	vtysh_user_init();
 	vtysh_config_init();
 

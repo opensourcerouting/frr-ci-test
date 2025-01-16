@@ -25,6 +25,7 @@
 struct debug nb_dbg_cbs_config = {0, "Northbound callbacks: configuration"};
 struct debug nb_dbg_cbs_state = {0, "Northbound callbacks: state"};
 struct debug nb_dbg_cbs_rpc = {0, "Northbound callbacks: RPCs"};
+struct debug nb_dbg_cbs_notify = {0, "Northbound callbacks: notifications"};
 struct debug nb_dbg_notif = {0, "Northbound notifications"};
 struct debug nb_dbg_events = {0, "Northbound events"};
 struct debug nb_dbg_libyang = {0, "libyang debugging"};
@@ -146,9 +147,9 @@ static int nb_cli_apply_changes_internal(struct vty *vty,
 
 	VTY_CHECK_XPATH;
 
-	nb_candidate_edit_config_changes(
-		vty->candidate_config, vty->cfg_changes, vty->num_cfg_changes,
-		xpath_base, buf, sizeof(buf), &error);
+	nb_candidate_edit_config_changes(vty->candidate_config, vty->cfg_changes,
+					 vty->num_cfg_changes, xpath_base,
+					 false, buf, sizeof(buf), &error);
 	if (error) {
 		/*
 		 * Failure to edit the candidate configuration should never
@@ -274,10 +275,31 @@ int nb_cli_apply_changes_clear_pending(struct vty *vty,
 	return nb_cli_apply_changes_internal(vty, xpath_base_abs, true);
 }
 
-int nb_cli_rpc(struct vty *vty, const char *xpath, struct list *input,
-	       struct list *output)
+int nb_cli_rpc_enqueue(struct vty *vty, const char *xpath, const char *value)
+{
+	struct nb_cfg_change *param;
+
+	if (vty->num_rpc_params == VTY_MAXCFGCHANGES) {
+		/* Not expected to happen. */
+		vty_out(vty,
+			"%% Exceeded the maximum number of params (%u) for a single command\n\n",
+			VTY_MAXCFGCHANGES);
+		return CMD_WARNING;
+	}
+
+	param = &vty->rpc_params[vty->num_rpc_params++];
+	strlcpy(param->xpath, xpath, sizeof(param->xpath));
+	param->value = value;
+
+	return CMD_SUCCESS;
+}
+
+int nb_cli_rpc(struct vty *vty, const char *xpath, struct lyd_node **output_p)
 {
 	struct nb_node *nb_node;
+	struct lyd_node *input = NULL;
+	struct lyd_node *output = NULL;
+	LY_ERR err;
 	int ret;
 	char errmsg[BUFSIZ] = {0};
 
@@ -288,12 +310,62 @@ int nb_cli_rpc(struct vty *vty, const char *xpath, struct list *input,
 		return CMD_WARNING;
 	}
 
+	/* create input tree */
+	err = lyd_new_path2(NULL, ly_native_ctx, xpath, NULL, 0, 0, 0, NULL,
+			    &input);
+	assert(err == LY_SUCCESS);
+
+	for (size_t i = 0; i < vty->num_rpc_params; i++) {
+		err = lyd_new_path(input, ly_native_ctx,
+				   vty->rpc_params[i].xpath,
+				   vty->rpc_params[i].value, 0, NULL);
+		assert(err == LY_SUCCESS);
+	}
+
+	if (vty_mgmt_fe_enabled()) {
+		char *data = NULL;
+
+		err = lyd_print_mem(&data, input, LYD_JSON, LYD_PRINT_SHRINK);
+		assert(err == LY_SUCCESS);
+
+		ret = vty_mgmt_send_rpc_req(vty, LYD_JSON, xpath, data);
+
+		free(data);
+		lyd_free_all(input);
+
+		if (ret < 0)
+			return CMD_WARNING;
+		return CMD_SUCCESS;
+	}
+
+	/* validate input tree to create implicit defaults */
+	err = lyd_validate_op(input, NULL, LYD_TYPE_RPC_YANG, NULL);
+	assert(err == LY_SUCCESS);
+
+	/* create output tree root for population in the callback */
+	err = lyd_new_path2(NULL, ly_native_ctx, xpath, NULL, 0, 0, 0, NULL,
+			    &output);
+	assert(err == LY_SUCCESS);
+
 	ret = nb_callback_rpc(nb_node, xpath, input, output, errmsg,
 			      sizeof(errmsg));
+
+	/* validate output tree to create implicit defaults */
+	err = lyd_validate_op(output, NULL, LYD_TYPE_REPLY_YANG, NULL);
+	assert(err == LY_SUCCESS);
+
+	lyd_free_all(input);
+	vty->num_rpc_params = 0;
+
 	switch (ret) {
 	case NB_OK:
+		if (output_p)
+			*output_p = output;
+		else
+			lyd_free_all(output);
 		return CMD_SUCCESS;
 	default:
+		lyd_free_all(output);
 		if (strlen(errmsg))
 			vty_show_nb_errors(vty, ret, errmsg);
 		return CMD_WARNING;
@@ -1772,13 +1844,15 @@ DEFPY (rollback_config,
 /* Debug CLI commands. */
 static struct debug *nb_debugs[] = {
 	&nb_dbg_cbs_config, &nb_dbg_cbs_state, &nb_dbg_cbs_rpc,
-	&nb_dbg_notif,      &nb_dbg_events,    &nb_dbg_libyang,
+	&nb_dbg_cbs_notify, &nb_dbg_notif,     &nb_dbg_events,
+	&nb_dbg_libyang,
 };
 
 static const char *const nb_debugs_conflines[] = {
 	"debug northbound callbacks configuration",
 	"debug northbound callbacks state",
 	"debug northbound callbacks rpc",
+	"debug northbound callbacks notify",
 	"debug northbound notifications",
 	"debug northbound events",
 	"debug northbound libyang",
@@ -1803,7 +1877,7 @@ DEFPY (debug_nb,
        debug_nb_cmd,
        "[no] debug northbound\
           [<\
-	    callbacks$cbs [{configuration$cbs_cfg|state$cbs_state|rpc$cbs_rpc}]\
+	    callbacks$cbs [{configuration$cbs_cfg|state$cbs_state|rpc$cbs_rpc|notify$cbs_notify}]\
 	    |notifications$notifications\
 	    |events$events\
 	    |libyang$libyang\
@@ -1816,13 +1890,14 @@ DEFPY (debug_nb,
        "State\n"
        "RPC\n"
        "Notifications\n"
+       "Notifications\n"
        "Events\n"
        "libyang debugging\n")
 {
 	uint32_t mode = DEBUG_NODE2MODE(vty->node);
 
 	if (cbs) {
-		bool none = (!cbs_cfg && !cbs_state && !cbs_rpc);
+		bool none = (!cbs_cfg && !cbs_state && !cbs_rpc && !cbs_notify);
 
 		if (none || cbs_cfg)
 			DEBUG_MODE_SET(&nb_dbg_cbs_config, mode, !no);
@@ -1830,6 +1905,8 @@ DEFPY (debug_nb,
 			DEBUG_MODE_SET(&nb_dbg_cbs_state, mode, !no);
 		if (none || cbs_rpc)
 			DEBUG_MODE_SET(&nb_dbg_cbs_rpc, mode, !no);
+		if (none || cbs_notify)
+			DEBUG_MODE_SET(&nb_dbg_cbs_notify, mode, !no);
 	}
 	if (notifications)
 		DEBUG_MODE_SET(&nb_dbg_notif, mode, !no);

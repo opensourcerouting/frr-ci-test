@@ -54,9 +54,7 @@ static int ospf6_gr_lsa_originate(struct ospf6_interface *oi,
 	/* prepare buffer */
 	memset(buffer, 0, sizeof(buffer));
 	lsa_header = (struct ospf6_lsa_header *)buffer;
-	grace_lsa =
-		(struct ospf6_grace_lsa *)((caddr_t)lsa_header
-					   + sizeof(struct ospf6_lsa_header));
+	grace_lsa = (struct ospf6_grace_lsa *)ospf6_lsa_header_end(lsa_header);
 
 	/* Put grace period. */
 	grace_lsa->tlv_period.header.type = htons(GRACE_PERIOD_TYPE);
@@ -561,9 +559,7 @@ static void ospf6_gr_nvm_update(struct ospf6 *ospf6, bool prepare)
 
 	inst_name = ospf6->name ? ospf6->name : VRF_DEFAULT_NAME;
 
-	json = json_object_from_file((char *)OSPF6D_GR_STATE);
-	if (json == NULL)
-		json = json_object_new_object();
+	json = frr_daemon_state_load();
 
 	json_object_object_get_ex(json, "instances", &json_instances);
 	if (!json_instances) {
@@ -591,9 +587,7 @@ static void ospf6_gr_nvm_update(struct ospf6 *ospf6, bool prepare)
 		json_object_int_add(json_instance, "timestamp",
 				    time(NULL) + ospf6->gr_info.grace_period);
 
-	json_object_to_file_ext((char *)OSPF6D_GR_STATE, json,
-				JSON_C_TO_STRING_PRETTY);
-	json_object_free(json);
+	frr_daemon_state_save(&json);
 }
 
 /*
@@ -608,9 +602,7 @@ void ospf6_gr_nvm_delete(struct ospf6 *ospf6)
 
 	inst_name = ospf6->name ? ospf6->name : VRF_DEFAULT_NAME;
 
-	json = json_object_from_file((char *)OSPF6D_GR_STATE);
-	if (json == NULL)
-		json = json_object_new_object();
+	json = frr_daemon_state_load();
 
 	json_object_object_get_ex(json, "instances", &json_instances);
 	if (!json_instances) {
@@ -620,9 +612,7 @@ void ospf6_gr_nvm_delete(struct ospf6 *ospf6)
 
 	json_object_object_del(json_instances, inst_name);
 
-	json_object_to_file_ext((char *)OSPF6D_GR_STATE, json,
-				JSON_C_TO_STRING_PRETTY);
-	json_object_free(json);
+	frr_daemon_state_save(&json);
 }
 
 /*
@@ -641,9 +631,7 @@ void ospf6_gr_nvm_read(struct ospf6 *ospf6)
 
 	inst_name = ospf6->name ? ospf6->name : VRF_DEFAULT_NAME;
 
-	json = json_object_from_file((char *)OSPF6D_GR_STATE);
-	if (json == NULL)
-		json = json_object_new_object();
+	json = frr_daemon_state_load();
 
 	json_object_object_get_ex(json, "instances", &json_instances);
 	if (!json_instances) {
@@ -687,11 +675,10 @@ void ospf6_gr_nvm_read(struct ospf6 *ospf6)
 					       ospf6->gr_info.grace_period);
 	}
 
-	json_object_object_del(json_instances, inst_name);
+	json_object_object_del(json_instance, "gracePeriod");
+	json_object_object_del(json_instance, "timestamp");
 
-	json_object_to_file_ext((char *)OSPF6D_GR_STATE, json,
-				JSON_C_TO_STRING_PRETTY);
-	json_object_free(json);
+	frr_daemon_state_save(&json);
 }
 
 void ospf6_gr_unplanned_start_interface(struct ospf6_interface *oi)

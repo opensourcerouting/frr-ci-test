@@ -10,12 +10,16 @@
 #include "lib/version.h"
 #include "routemap.h"
 #include "filter.h"
+#include "keychain.h"
 #include "libfrr.h"
 #include "frr_pthread.h"
 #include "mgmtd/mgmt.h"
 #include "mgmtd/mgmt_ds.h"
+#include "ripd/rip_nb.h"
+#include "ripngd/ripng_nb.h"
 #include "routing_nb.h"
-
+#include "affinitymap.h"
+#include "zebra/zebra_cli.h"
 
 /* mgmt options, we use GNU getopt library. */
 static const struct option longopts[] = {
@@ -45,7 +49,6 @@ struct zebra_privs_t mgmt_privs = {
 };
 
 static struct frr_daemon_info mgmtd_di;
-char backup_config_file[256];
 
 /* SIGHUP handler. */
 static void sighup(void)
@@ -138,27 +141,24 @@ static struct frr_signal_t mgmt_signals[] = {
 };
 
 #ifdef HAVE_STATICD
-extern const struct frr_yang_module_info frr_staticd_info;
+extern const struct frr_yang_module_info frr_staticd_cli_info;
 #endif
 
+/*
+ * These are modules that are only needed by mgmtd and hence not included into
+ * the lib and backend daemons.
+ */
+const struct frr_yang_module_info ietf_netconf_with_defaults_info = {
+	.name = "ietf-netconf-with-defaults",
+	.ignore_cfg_cbs = true,
+	.nodes = { { .xpath = NULL } },
+};
 
 /*
  * These are stub info structs that are used to load the modules used by backend
  * clients into mgmtd. The modules are used by libyang in order to support
  * parsing binary data returns from the backend.
  */
-const struct frr_yang_module_info zebra_info = {
-	.name = "frr-zebra",
-	.ignore_cfg_cbs = true,
-	.nodes = { { .xpath = NULL } },
-};
-
-const struct frr_yang_module_info affinity_map_info = {
-	.name = "frr-affinity-map",
-	.ignore_cfg_cbs = true,
-	.nodes = { { .xpath = NULL } },
-};
-
 const struct frr_yang_module_info zebra_route_map_info = {
 	.name = "frr-zebra-route-map",
 	.ignore_cfg_cbs = true,
@@ -170,36 +170,53 @@ const struct frr_yang_module_info zebra_route_map_info = {
  * MGMTd.
  */
 static const struct frr_yang_module_info *const mgmt_yang_modules[] = {
-	&frr_filter_info,
-	&frr_interface_info,
-	&frr_route_map_info,
-	&frr_routing_info,
-	&frr_vrf_info,
+	&frr_filter_cli_info,
+	&frr_interface_cli_info,
+	&frr_route_map_cli_info,
+	&frr_routing_cli_info,
+	&frr_vrf_cli_info,
+	&frr_affinity_map_cli_info,
+
+	/* mgmtd-only modules */
+	&ietf_netconf_with_defaults_info,
 
 	/*
 	 * YANG module info used by backend clients get added here.
 	 */
 
-	&zebra_info,
-	&affinity_map_info,
+	&frr_zebra_cli_info,
 	&zebra_route_map_info,
+	&ietf_key_chain_cli_info,
+	&ietf_key_chain_deviation_info,
 
+#ifdef HAVE_RIPD
+	&frr_ripd_cli_info,
+#endif
+#ifdef HAVE_RIPNGD
+	&frr_ripngd_cli_info,
+#endif
 #ifdef HAVE_STATICD
-	&frr_staticd_info,
+	&frr_staticd_cli_info,
 #endif
 };
 
-FRR_DAEMON_INFO(mgmtd, MGMTD, .vty_port = MGMTD_VTY_PORT,
-
+/* clang-format off */
+FRR_DAEMON_INFO(mgmtd, MGMTD,
+		.vty_port = MGMTD_VTY_PORT,
 		.proghelp = "FRR Management Daemon.",
 
-		.signals = mgmt_signals, .n_signals = array_size(mgmt_signals),
+		.signals = mgmt_signals,
+		.n_signals = array_size(mgmt_signals),
 
-		.privs = &mgmt_privs, .yang_modules = mgmt_yang_modules,
+		.privs = &mgmt_privs,
+
+		.yang_modules = mgmt_yang_modules,
 		.n_yang_modules = array_size(mgmt_yang_modules),
 
 		/* avoid libfrr trying to read our config file for us */
-		.flags = FRR_MANUAL_VTY_START);
+		.flags = FRR_MANUAL_VTY_START | FRR_NO_SPLIT_CONFIG,
+	);
+/* clang-format on */
 
 #define DEPRECATED_OPTIONS ""
 
@@ -215,8 +232,9 @@ int main(int argc, char **argv)
 
 	frr_preinit(&mgmtd_di, argc, argv);
 	frr_opt_add(
-		"s:" DEPRECATED_OPTIONS, longopts,
-		"  -s, --socket_size  Set MGMTD peer socket send buffer size\n");
+		"s:n" DEPRECATED_OPTIONS, longopts,
+		"  -s, --socket_size  Set MGMTD peer socket send buffer size\n"
+		"  -n, --vrfwnetns    Use NetNS as VRF backend\n");
 
 	/* Command line argument treatment. */
 	while (1) {
@@ -259,11 +277,6 @@ int main(int argc, char **argv)
 	/* MGMTD related initialization.  */
 	mgmt_init();
 
-	snprintf(backup_config_file, sizeof(backup_config_file),
-		 "%s/zebra.conf", frr_sysconfdir);
-	mgmtd_di.backup_config_file = backup_config_file;
-
-	/* this will queue a read configs event */
 	frr_config_fork();
 
 	frr_run(mm->master);

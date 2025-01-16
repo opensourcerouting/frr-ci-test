@@ -16,7 +16,6 @@ DECLARE_MGROUP(NHRPD);
 
 #define NHRPD_DEFAULT_HOLDTIME	7200
 
-#define NHRP_VTY_PORT		2610
 #define NHRP_DEFAULT_CONFIG	"nhrpd.conf"
 
 extern struct event_loop *master;
@@ -312,6 +311,7 @@ DECLARE_DLIST(nhrp_reglist, struct nhrp_registration, reglist_entry);
 struct nhrp_interface {
 	struct interface *ifp;
 
+	struct zbuf *auth_token;
 	unsigned enabled : 1;
 
 	char *ipsec_profile, *ipsec_fallback_profile, *source;
@@ -362,6 +362,7 @@ int sock_open_unix(const char *path);
 
 void nhrp_interface_init(void);
 void nhrp_interface_update(struct interface *ifp);
+void nhrp_interface_update_arp(struct interface *ifp, bool arp_enable);
 void nhrp_interface_update_mtu(struct interface *ifp, afi_t afi);
 void nhrp_interface_update_nbma(struct interface *ifp,
 				struct nhrp_gre_info *gre_info);
@@ -480,8 +481,12 @@ struct nhrp_packet_header *nhrp_packet_push(struct zbuf *zb, uint8_t type,
 					    const union sockunion *src_nbma,
 					    const union sockunion *src_proto,
 					    const union sockunion *dst_proto);
-void nhrp_packet_complete(struct zbuf *zb, struct nhrp_packet_header *hdr);
 uint16_t nhrp_packet_calculate_checksum(const uint8_t *pdu, uint16_t len);
+
+void nhrp_packet_complete(struct zbuf *zb, struct nhrp_packet_header *hdr,
+			  struct interface *ifp);
+void nhrp_packet_complete_auth(struct zbuf *zb, struct nhrp_packet_header *hdr,
+			       struct interface *ifp, bool auth);
 
 struct nhrp_packet_header *nhrp_packet_pull(struct zbuf *zb,
 					    union sockunion *src_nbma,
@@ -501,8 +506,7 @@ nhrp_ext_push(struct zbuf *zb, struct nhrp_packet_header *hdr, uint16_t type);
 void nhrp_ext_complete(struct zbuf *zb, struct nhrp_extension_header *ext);
 struct nhrp_extension_header *nhrp_ext_pull(struct zbuf *zb,
 					    struct zbuf *payload);
-void nhrp_ext_request(struct zbuf *zb, struct nhrp_packet_header *hdr,
-		      struct interface *);
+void nhrp_ext_request(struct zbuf *zb, struct nhrp_packet_header *hdr);
 int nhrp_ext_reply(struct zbuf *zb, struct nhrp_packet_header *hdr,
 		   struct interface *ifp, struct nhrp_extension_header *ext,
 		   struct zbuf *extpayload);

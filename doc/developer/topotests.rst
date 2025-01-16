@@ -10,7 +10,10 @@ Installation and Setup
 
 Topotests run under python3.
 
-Tested with Ubuntu 20.04,Ubuntu 18.04, and Debian 11.
+Tested with Ubuntu 22.04,Ubuntu 20.04, and Debian 12.
+
+Python protobuf version < 4 is required b/c python protobuf >= 4 requires a
+protoc >= 3.19, and older package versions are shipped by in the above distros.
 
 Instructions are the same for all setups. However, ExaBGP is only used for
 BGP tests.
@@ -33,14 +36,24 @@ Installing Topotest Requirements
        tshark \
        valgrind
    python3 -m pip install wheel
-   python3 -m pip install 'pytest>=6.2.4'
-   python3 -m pip install 'pytest-xdist>=2.3.0'
+   python3 -m pip install 'pytest>=6.2.4' 'pytest-xdist>=2.3.0'
    python3 -m pip install 'scapy>=2.4.5'
    python3 -m pip install xmltodict
    python3 -m pip install git+https://github.com/Exa-Networks/exabgp@0659057837cd6c6351579e9f0fa47e9fb7de7311
    useradd -d /var/run/exabgp/ -s /bin/false exabgp
 
-   # To enable the gRPC topotest install:
+The version of protobuf package that is installed on your system will determine
+which versions of the python protobuf packages you need to install.
+
+.. code:: shell
+
+   # - Either - For protobuf version <= 3.12
+   python3 -m pip install 'protobuf<4'
+
+   # - OR- for protobuf version >= 3.21
+   python3 -m pip install 'protobuf>=4'
+
+   # To enable the gRPC topotest also install:
    python3 -m pip install grpcio grpcio-tools
 
 
@@ -113,9 +126,9 @@ If you prefer to manually build FRR, then use the following suggested config:
 
    ./configure \
        --prefix=/usr \
-       --localstatedir=/var/run/frr \
+       --sysconfdir=/etc \
+       --localstatedir=/var \
        --sbindir=/usr/lib/frr \
-       --sysconfdir=/etc/frr \
        --enable-vtysh \
        --enable-pimd \
        --enable-pim6d \
@@ -383,8 +396,9 @@ for ``master`` branch:
    ./bootstrap.sh
    ./configure \
        --enable-address-sanitizer \
-       --prefix=/usr/lib/frr --sysconfdir=/etc/frr \
-       --localstatedir=/var/run/frr \
+       --prefix=/usr/lib/frr \
+       --sysconfdir=/etc \
+       --localstatedir=/var \
        --sbindir=/usr/lib/frr --bindir=/usr/lib/frr \
        --with-moduledir=/usr/lib/frr/modules \
        --enable-multipath=0 --enable-rtadv \
@@ -698,6 +712,84 @@ Here's an example of collecting ``rr`` execution state from ``mgmtd`` on router
 
 To specify additional arguments for ``rr record``, one can use the
 ``--rr-options``.
+
+.. _code_coverage:
+
+Code coverage
+"""""""""""""
+Code coverage reporting requires installation of the ``gcov`` and ``lcov``
+packages.
+
+Code coverage can automatically be gathered for any topotest run. To support
+this FRR must first be compiled with the ``--enable-gcov`` configure option.
+This will cause *.gnco files to be created during the build. When topotests are
+run the statistics are generated and stored in *.gcda files. Topotest
+infrastructure will gather these files, capture the information into a
+``coverage.info`` ``lcov`` file and also report the coverage summary.
+
+To enable code coverage support pass the ``--cov-topotest`` argument to pytest.
+If you build your FRR in a directory outside of the FRR source directory you
+will also need to pass the ``--cov-frr-build-dir`` argument specifying the build
+directory location.
+
+During the topotest run the *.gcda files are generated into a ``gcda``
+sub-directory of the top-level run directory (i.e., normally
+``/tmp/topotests/gcda``). These files will then be copied at the end of the
+topotest run into the FRR build directory where the ``gcov`` and ``lcov``
+utilities expect to find them. This is done to deal with the various different
+file ownership and permissions.
+
+At the end of the run ``lcov`` will be run to capture all of the coverage data
+into a ``coverage.info`` file. This file will be located in the top-level run
+directory (i.e., normally ``/tmp/topotests/coverage.info``).
+
+The ``coverage.info`` file can then be used to generate coverage reports or file
+markup (e.g., using the ``genhtml`` utility) or enable markup within your
+IDE/editor if supported (e.g., the emacs ``cov-mode`` package)
+
+NOTE: the *.gcda files in ``/tmp/topotests/gcda`` are cumulative so if you do
+not remove them they will aggregate data across multiple topotest runs.
+
+How to reproduce failed Tests
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Generally tests fail but recreating the test failure reliably is not necessarily
+easy, or it happens once every 10 runs locally.  Here are some generic strategies
+that are employed to allow for the test to be reproduced reliably
+
+.. code:: console
+
+   cd <test directory>
+   ln -s test_the_test_name.py test_a.py
+   ln -s test_the_test_name.py test_b.py
+
+This allows you to run multiple copies of the same test with one full test run.
+Additionally if you need to modify the test you don't need to recopy everything
+to make it work.  By adding multiple copies of the same occassionally failing test
+you raise the odds of it failing again.  Additionally you have easily accessible
+good and bad runs to compare.
+
+.. code:: console
+
+   sudo -E python3 -m pytest -n <some value> --dist=loadfile
+
+Choose a n value that is greater than the number of cpu's avalaible on the system.
+This changes the timing and may or may not make it more likely that the test fails.
+Be aware, though, that this changes memory requirements as well as may make other
+tests fail more often as well.  You should choose values that do not cause the system
+to go into swap usage.
+
+.. code:: console
+
+   stress -n <number of cpu's to put at 100%>
+
+By filling up cpu's with programs that do nothing you also change the timing again and
+may cause the problem to happen more often.
+
+There is no magic bullet here.  You as a developer might have to experiment with different
+values and different combinations of the above to cause the problem to happen more often.
+These are just the tools that we know of at this point in time.
+
 
 .. _topotests_docker:
 

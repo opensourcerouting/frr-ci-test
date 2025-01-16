@@ -188,7 +188,7 @@ DEFPY_YANG(
 DEFPY_YANG(
 	match_ip_address_prefix_list,
 	match_ip_address_prefix_list_cmd,
-	"match ip address prefix-list PREFIXLIST_NAME$name",
+	"match ip address prefix-list PREFIXLIST4_NAME$name",
 	MATCH_STR
 	IP_STR
 	"Match address of route\n"
@@ -209,7 +209,7 @@ DEFPY_YANG(
 
 DEFPY_YANG(
 	no_match_ip_address_prefix_list, no_match_ip_address_prefix_list_cmd,
-	"no match ip address prefix-list [PREFIXLIST_NAME]",
+	"no match ip address prefix-list [PREFIXLIST4_NAME]",
 	NO_STR
 	MATCH_STR
 	IP_STR
@@ -265,7 +265,7 @@ DEFPY_YANG(
 DEFPY_YANG(
 	match_ip_next_hop_prefix_list,
 	match_ip_next_hop_prefix_list_cmd,
-	"match ip next-hop prefix-list PREFIXLIST_NAME$name",
+	"match ip next-hop prefix-list PREFIXLIST4_NAME$name",
 	MATCH_STR
 	IP_STR
 	"Match next-hop address of route\n"
@@ -287,7 +287,7 @@ DEFPY_YANG(
 DEFPY_YANG(
 	no_match_ip_next_hop_prefix_list,
 	no_match_ip_next_hop_prefix_list_cmd,
-	"no match ip next-hop prefix-list [PREFIXLIST_NAME]",
+	"no match ip next-hop prefix-list [PREFIXLIST4_NAME]",
 	NO_STR
 	MATCH_STR
 	IP_STR
@@ -379,7 +379,7 @@ DEFPY_YANG(
 
 DEFPY_YANG(
 	match_ipv6_address_prefix_list, match_ipv6_address_prefix_list_cmd,
-	"match ipv6 address prefix-list PREFIXLIST_NAME$name",
+	"match ipv6 address prefix-list PREFIXLIST6_NAME$name",
 	MATCH_STR
 	IPV6_STR
 	"Match address of route\n"
@@ -401,7 +401,7 @@ DEFPY_YANG(
 DEFPY_YANG(
 	no_match_ipv6_address_prefix_list,
 	no_match_ipv6_address_prefix_list_cmd,
-	"no match ipv6 address prefix-list [PREFIXLIST_NAME]",
+	"no match ipv6 address prefix-list [PREFIXLIST6_NAME]",
 	NO_STR
 	MATCH_STR
 	IPV6_STR
@@ -490,29 +490,33 @@ DEFPY_YANG(
 
 DEFPY_YANG(
 	match_tag, match_tag_cmd,
-	"match tag (1-4294967295)$tag",
+	"match tag <untagged$untagged|(1-4294967295)$tagged>",
 	MATCH_STR
 	"Match tag of route\n"
+	"Untagged route\n"
 	"Tag value\n")
 {
 	const char *xpath =
 		"./match-condition[condition='frr-route-map:match-tag']";
 	char xpath_value[XPATH_MAXLEN];
+	char value[64];
 
 	nb_cli_enqueue_change(vty, xpath, NB_OP_CREATE, NULL);
 	snprintf(xpath_value, sizeof(xpath_value),
 		 "%s/rmap-match-condition/tag", xpath);
-	nb_cli_enqueue_change(vty, xpath_value, NB_OP_MODIFY, tag_str);
+	snprintf(value, sizeof(value), "%lu", tagged ? tagged : 0);
+	nb_cli_enqueue_change(vty, xpath_value, NB_OP_MODIFY, value);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
 
 DEFPY_YANG(
 	no_match_tag, no_match_tag_cmd,
-	"no match tag [(1-4294967295)]",
+	"no match tag [<untagged|(1-4294967295)>]",
 	NO_STR
 	MATCH_STR
 	"Match tag of route\n"
+	"Untagged route\n"
 	"Tag value\n")
 {
 	const char *xpath =
@@ -581,9 +585,15 @@ void route_map_condition_show(struct vty *vty, const struct lyd_node *dnode,
 			yang_dnode_get_string(dnode,
 					      "./rmap-match-condition/metric"));
 	} else if (IS_MATCH_TAG(condition)) {
-		vty_out(vty, " match tag %s\n",
-			yang_dnode_get_string(dnode,
-					      "./rmap-match-condition/tag"));
+		uint32_t tag =
+			strtoul(yang_dnode_get_string(dnode,
+						      "./rmap-match-condition/tag"),
+				NULL, 10);
+
+		if (!tag)
+			vty_out(vty, " match tag untagged\n");
+		else
+			vty_out(vty, " match tag %u\n", tag);
 	} else if (IS_MATCH_IPv4_PREFIX_LEN(condition)) {
 		vty_out(vty, " match ip address prefix-len %s\n",
 			yang_dnode_get_string(
@@ -973,28 +983,32 @@ DEFPY_YANG(no_set_max_metric, no_set_max_metric_cmd,
 
 DEFPY_YANG(
 	set_tag, set_tag_cmd,
-	"set tag (1-4294967295)$tag",
+	"set tag <untagged$untagged|(1-4294967295)$tagged>",
 	SET_STR
 	"Tag value for routing protocol\n"
+	"Untagged route\n"
 	"Tag value\n")
 {
 	const char *xpath = "./set-action[action='frr-route-map:set-tag']";
 	char xpath_value[XPATH_MAXLEN];
+	char value[64];
 
 	nb_cli_enqueue_change(vty, xpath, NB_OP_CREATE, NULL);
 	snprintf(xpath_value, sizeof(xpath_value), "%s/rmap-set-action/tag",
 		 xpath);
-	nb_cli_enqueue_change(vty, xpath_value, NB_OP_MODIFY, tag_str);
+	snprintf(value, sizeof(value), "%lu", tagged ? tagged : 0);
+	nb_cli_enqueue_change(vty, xpath_value, NB_OP_MODIFY, value);
 
 	return nb_cli_apply_changes(vty, NULL);
 }
 
 DEFPY_YANG(
 	no_set_tag, no_set_tag_cmd,
-	"no set tag [(1-4294967295)]",
+	"no set tag [<untagged|(1-4294967295)>]",
 	NO_STR
 	SET_STR
 	"Tag value for routing protocol\n"
+	"Untagged route\n"
 	"Tag value\n")
 {
 	const char *xpath = "./set-action[action='frr-route-map:set-tag']";
@@ -1101,8 +1115,15 @@ void route_map_action_show(struct vty *vty, const struct lyd_node *dnode,
 			yang_dnode_get_string(dnode,
 					      "./rmap-set-action/max-metric"));
 	} else if (IS_SET_TAG(action)) {
-		vty_out(vty, " set tag %s\n",
-			yang_dnode_get_string(dnode, "rmap-set-action/tag"));
+		uint32_t tag =
+			strtoul(yang_dnode_get_string(dnode,
+						      "rmap-set-action/tag"),
+				NULL, 10);
+
+		if (!tag)
+			vty_out(vty, " set tag untagged\n");
+		else
+			vty_out(vty, " set tag %u\n", tag);
 	} else if (IS_SET_SR_TE_COLOR(action)) {
 		vty_out(vty, " set sr-te color %s\n",
 			yang_dnode_get_string(dnode,
@@ -1252,14 +1273,14 @@ void route_map_action_show(struct vty *vty, const struct lyd_node *dnode,
 	} else if (IS_SET_EXTCOMMUNITY_LB(action)) {
 		enum ecommunity_lb_type lb_type;
 		char str[VTY_BUFSIZ];
-		uint16_t bandwidth;
+		uint32_t bandwidth;
 
 		lb_type = yang_dnode_get_enum(
 			dnode,
 			"./rmap-set-action/frr-bgp-route-map:extcommunity-lb/lb-type");
 		switch (lb_type) {
 		case EXPLICIT_BANDWIDTH:
-			bandwidth = yang_dnode_get_uint16(
+			bandwidth = yang_dnode_get_uint32(
 				dnode,
 				"./rmap-set-action/frr-bgp-route-map:extcommunity-lb/bandwidth");
 			snprintf(str, sizeof(str), "%d", bandwidth);

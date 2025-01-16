@@ -40,17 +40,16 @@
 	(PEER_FLAG_LOCAL_AS_NO_PREPEND | PEER_FLAG_LOCAL_AS_REPLACE_AS)
 
 #define PEER_UPDGRP_AF_FLAGS                                                   \
-	(PEER_FLAG_SEND_COMMUNITY | PEER_FLAG_SEND_EXT_COMMUNITY               \
-	 | PEER_FLAG_SEND_LARGE_COMMUNITY                                      \
-	 | PEER_FLAG_DEFAULT_ORIGINATE | PEER_FLAG_REFLECTOR_CLIENT            \
-	 | PEER_FLAG_RSERVER_CLIENT | PEER_FLAG_NEXTHOP_SELF                   \
-	 | PEER_FLAG_NEXTHOP_UNCHANGED | PEER_FLAG_FORCE_NEXTHOP_SELF          \
-	 | PEER_FLAG_AS_PATH_UNCHANGED | PEER_FLAG_MED_UNCHANGED               \
-	 | PEER_FLAG_NEXTHOP_LOCAL_UNCHANGED | PEER_FLAG_REMOVE_PRIVATE_AS     \
-	 | PEER_FLAG_REMOVE_PRIVATE_AS_ALL                                     \
-	 | PEER_FLAG_REMOVE_PRIVATE_AS_REPLACE                                 \
-	 | PEER_FLAG_REMOVE_PRIVATE_AS_ALL_REPLACE                             \
-	 | PEER_FLAG_AS_OVERRIDE)
+	(PEER_FLAG_SEND_COMMUNITY | PEER_FLAG_SEND_EXT_COMMUNITY |             \
+	 PEER_FLAG_SEND_EXT_COMMUNITY_RPKI | PEER_FLAG_SEND_LARGE_COMMUNITY |  \
+	 PEER_FLAG_DEFAULT_ORIGINATE | PEER_FLAG_REFLECTOR_CLIENT |            \
+	 PEER_FLAG_RSERVER_CLIENT | PEER_FLAG_NEXTHOP_SELF |                   \
+	 PEER_FLAG_NEXTHOP_UNCHANGED | PEER_FLAG_FORCE_NEXTHOP_SELF |          \
+	 PEER_FLAG_AS_PATH_UNCHANGED | PEER_FLAG_MED_UNCHANGED |               \
+	 PEER_FLAG_NEXTHOP_LOCAL_UNCHANGED | PEER_FLAG_REMOVE_PRIVATE_AS |     \
+	 PEER_FLAG_REMOVE_PRIVATE_AS_ALL |                                     \
+	 PEER_FLAG_REMOVE_PRIVATE_AS_REPLACE |                                 \
+	 PEER_FLAG_REMOVE_PRIVATE_AS_ALL_REPLACE | PEER_FLAG_AS_OVERRIDE)
 
 #define PEER_UPDGRP_CAP_FLAGS (PEER_CAP_AS4_RCV)
 
@@ -370,7 +369,6 @@ extern void update_group_policy_update(struct bgp *bgp,
 extern void update_group_af_walk(struct bgp *bgp, afi_t afi, safi_t safi,
 				 updgrp_walkcb cb, void *ctx);
 extern void update_group_walk(struct bgp *bgp, updgrp_walkcb cb, void *ctx);
-extern void update_group_periodic_merge(struct bgp *bgp);
 extern void
 update_group_refresh_default_originate_route_map(struct event *thread);
 extern void update_group_start_advtimer(struct bgp *bgp);
@@ -442,7 +440,7 @@ extern struct bgp_adj_out *bgp_adj_out_alloc(struct update_subgroup *subgrp,
 extern void bgp_adj_out_remove_subgroup(struct bgp_dest *dest,
 					struct bgp_adj_out *adj,
 					struct update_subgroup *subgrp);
-extern void bgp_adj_out_set_subgroup(struct bgp_dest *dest,
+extern bool bgp_adj_out_set_subgroup(struct bgp_dest *dest,
 				     struct update_subgroup *subgrp,
 				     struct attr *attr,
 				     struct bgp_path_info *path);

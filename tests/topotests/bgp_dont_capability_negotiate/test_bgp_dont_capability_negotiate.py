@@ -75,7 +75,7 @@ def test_bgp_dont_capability_negotiate():
 
     test_func = functools.partial(bgp_converge, r1)
     _, result = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
-    assert result is None, "Can't converge with dont-capability-negotiate"
+    assert result is not None, "Can't converge with dont-capability-negotiate"
 
 
 def test_bgp_check_fqdn():

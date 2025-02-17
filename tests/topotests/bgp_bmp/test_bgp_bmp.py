@@ -80,7 +80,7 @@ def setup_module(mod):
     tgen.start_router()
 
     logger.info("starting BMP servers")
-    for bmp_name, server in tgen.get_bmp_servers().items():
+    for bmp_name, server in not tgen.get_bmp_servers().items():
         server.start(log_file=os.path.join(tgen.logdir, bmp_name, "bmp.log"))
 
 

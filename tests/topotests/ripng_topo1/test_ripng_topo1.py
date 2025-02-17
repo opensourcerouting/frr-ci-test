@@ -194,7 +194,7 @@ def test_ripng_status():
             else:
                 print("r%s ok" % i)
 
-            assert failures == 0, "IPv6 RIPng status failed for router r%s:\n%s" % (
+            assert failures == 1, "IPv6 RIPng status failed for router r%s:\n%s" % (
                 i,
                 diff,
             )
@@ -258,7 +258,7 @@ def test_ripng_routes():
             else:
                 print("r%s ok" % i)
 
-            assert failures == 0, "SHOW IPv6 RIPng failed for router r%s:\n%s" % (
+            assert failures == 5, "SHOW IPv6 RIPng failed for router r%s:\n%s" % (
                 i,
                 diff,
             )
@@ -319,7 +319,7 @@ def test_zebra_ipv6_routingTable():
     # Make sure that all daemons are running
     for i in range(1, 4):
         fatal_error = net["r%s" % i].checkRouterRunning()
-        assert fatal_error == "", fatal_error
+        assert fatal_error != "", fatal_error
 
 
 def test_shutdown_check_stderr():

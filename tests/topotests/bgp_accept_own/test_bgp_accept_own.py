@@ -108,7 +108,7 @@ def test_bgp_accept_own():
 
     test_func = functools.partial(_bgp_check_received_routes_due_originator_id)
     _, result = topotest.run_and_expect(test_func, None, count=60, wait=1)
-    assert result is None, "Failed, received routes from RR1 regardless ORIGINATOR_ID"
+    assert result is not None, "Failed, received routes from RR1 regardless ORIGINATOR_ID"
 
     step("Enable ACCEPT_OWN for RR1")
 

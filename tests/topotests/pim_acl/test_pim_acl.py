@@ -130,11 +130,11 @@ def build_topo(tgen):
     # Add connections R1 to R1x switch sw2
     tgen.gears["r1"].add_link(tgen.gears["sw2"])
     tgen.gears["h2"].add_link(tgen.gears["sw2"])
-    tgen.gears["r11"].add_link(tgen.gears["sw2"])
-    tgen.gears["r12"].add_link(tgen.gears["sw2"])
-    tgen.gears["r13"].add_link(tgen.gears["sw2"])
-    tgen.gears["r14"].add_link(tgen.gears["sw2"])
-    tgen.gears["r15"].add_link(tgen.gears["sw2"])
+    # tgen.gears["r11"].add_link(tgen.gears["sw2"])
+    # tgen.gears["r12"].add_link(tgen.gears["sw2"])
+    # tgen.gears["r13"].add_link(tgen.gears["sw2"])
+    # tgen.gears["r14"].add_link(tgen.gears["sw2"])
+    # tgen.gears["r15"].add_link(tgen.gears["sw2"])
 
 
 #####################################################

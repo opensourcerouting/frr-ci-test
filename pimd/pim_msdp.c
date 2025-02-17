@@ -411,12 +411,10 @@ void pim_msdp_sa_ref(struct pim_instance *pim, struct pim_msdp_peer *mp,
 			pim_addr_to_prefix(&grp, sa->sg.grp);
 			rp_info = pim_rp_find_match_group(pim, &grp);
 			if (rp_info) {
-			    sa->rp = rp_info->rp.rpf_addr;
-			} else
-			{
-			    sa->rp = pim->msdp.originator_id;
+				sa->rp = rp_info->rp.rpf_addr;
+			} else {
+				sa->rp = pim->msdp.originator_id;
 			}
-			sa->rp = pim->msdp.originator_id;
 			pim_msdp_pkt_sa_tx_one(sa);
 		}
 		sa->flags &= ~PIM_MSDP_SAF_STALE;
@@ -775,7 +773,10 @@ static void pim_msdp_peer_listen(struct pim_msdp_peer *mp)
 	* first listening peer is configured; but don't bother tearing it down
 	* when
 	* all the peers go down */
-	pim_msdp_sock_listen(mp->pim);
+	if (mp->auth_type == MSDP_AUTH_NONE)
+		pim_msdp_sock_listen(mp->pim);
+	else
+		pim_msdp_sock_auth_listen(mp);
 }
 
 /* 11.2.A4 and 11.2.A5: transition active or passive peer to
@@ -1047,6 +1048,7 @@ struct pim_msdp_peer *pim_msdp_peer_add(struct pim_instance *pim,
 
 	mp->state = PIM_MSDP_INACTIVE;
 	mp->fd = -1;
+	mp->auth_listen_sock = -1;
 	strlcpy(mp->last_reset, "-", sizeof(mp->last_reset));
 	/* higher IP address is listener */
 	if (ntohl(mp->local.s_addr) > ntohl(mp->peer.s_addr)) {
@@ -1102,6 +1104,12 @@ static void pim_msdp_peer_free(struct pim_msdp_peer *mp)
 		stream_fifo_free(mp->obuf);
 	}
 
+	/* Free authentication data. */
+	event_cancel(&mp->auth_listen_ev);
+	XFREE(MTYPE_PIM_MSDP_AUTH_KEY, mp->auth_key);
+	if (mp->auth_listen_sock != -1)
+		close(mp->auth_listen_sock);
+
 	XFREE(MTYPE_PIM_MSDP_MG_NAME, mp->mesh_group_name);
 
 	mp->pim = NULL;
@@ -1130,17 +1138,30 @@ void pim_msdp_peer_del(struct pim_msdp_peer **mp)
 	*mp = NULL;
 }
 
-void pim_msdp_peer_change_source(struct pim_msdp_peer *mp,
-				 const struct in_addr *addr)
+void pim_msdp_peer_restart(struct pim_msdp_peer *mp)
 {
+	/* Stop auth listening socket if any. */
+	event_cancel(&mp->auth_listen_ev);
+	if (mp->auth_listen_sock != -1) {
+		close(mp->auth_listen_sock);
+		mp->auth_listen_sock = -1;
+	}
+
+	/* Stop previously running connection. */
 	pim_msdp_peer_stop_tcp_conn(mp, true);
 
-	mp->local = *addr;
-
+	/* Start connection again. */
 	if (PIM_MSDP_PEER_IS_LISTENER(mp))
 		pim_msdp_peer_listen(mp);
 	else
 		pim_msdp_peer_connect(mp);
+}
+
+void pim_msdp_peer_change_source(struct pim_msdp_peer *mp,
+				 const struct in_addr *addr)
+{
+	mp->local = *addr;
+	pim_msdp_peer_restart(mp);
 }
 
 /* peer hash and peer list helpers */
@@ -1319,6 +1340,19 @@ bool pim_msdp_peer_config_write(struct vty *vty, struct pim_instance *pim)
 
 		vty_out(vty, " msdp peer %pI4 source %pI4\n", &mp->peer,
 			&mp->local);
+
+		if (mp->auth_type == MSDP_AUTH_MD5)
+			vty_out(vty, " msdp peer %pI4 password %s\n", &mp->peer,
+				mp->auth_key);
+
+		if (mp->acl_in)
+			vty_out(vty, " msdp peer %pI4 sa-filter %s in\n",
+				&mp->peer, mp->acl_in);
+
+		if (mp->acl_out)
+			vty_out(vty, " msdp peer %pI4 sa-filter %s out\n",
+				&mp->peer, mp->acl_out);
+
 		written = true;
 	}
 

@@ -61,9 +61,9 @@ For chat, we currently use [Slack](https://frrouting.slack.com). You can join
 by clicking the "Slack" link under the
 [Participate](https://frrouting.org/community) section of our website.
 
-
 Contributing
 ------------
+
 
 FRR maintains [developer's documentation](http://docs.frrouting.org/projects/dev-guide/en/latest/index.html)
 which contains the [project workflow](http://docs.frrouting.org/projects/dev-guide/en/latest/workflow.html)

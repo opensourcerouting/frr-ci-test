@@ -316,9 +316,8 @@ int bfd_session_enable(struct bfd_session *bs)
 	bs->ifp = ifp;
 
 	/* Attempt to use data plane. */
-	if (bglobal.bg_use_dplane && bfd_dplane_add_session(bs) == 0) {
+	if (bglobal.bg_use_dplane && bfd_dplane_add_session(bs) == 0)
 		return 0;
-	}
 
 	/* Sanity check: don't leak open sockets. */
 	if (bs->sock != -1) {
@@ -1111,9 +1110,8 @@ void bs_final_handler(struct bfd_session *bs)
 	 * When using demand mode we must disable the detection timer
 	 * for lost control packets.
 	 */
-	if (bs->demand_mode) {
+	if (bs->demand_mode)
 		return;
-	}
 
 	/*
 	 * Calculate transmission time based on new timers.

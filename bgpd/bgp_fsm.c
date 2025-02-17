@@ -602,6 +602,7 @@ const char *const peer_down_str[] = {
 	"Socket Error",
 	"Admin. shutdown (RTT)",
 	"Suppress Fib Turned On or Off",
+	"Password config change",
 };
 
 static void bgp_graceful_restart_timer_off(struct peer_connection *connection,
@@ -1482,7 +1483,7 @@ enum bgp_fsm_state_progress bgp_stop(struct peer_connection *connection)
 	EVENT_OFF(connection->t_connect);
 	EVENT_OFF(connection->t_holdtime);
 	EVENT_OFF(connection->t_routeadv);
-	EVENT_OFF(peer->connection->t_delayopen);
+	EVENT_OFF(connection->t_delayopen);
 
 	/* Clear input and output buffer.  */
 	frr_with_mutex (&connection->io_mtx) {
@@ -2739,15 +2740,16 @@ static void bgp_gr_update_mode_of_all_peers(struct bgp *bgp,
 				   peer, peer->peer_gr_new_status_flag,
 				   peer->flags);
 
+		peer->last_reset = PEER_DOWN_CAPABILITY_CHANGE;
+
 		/* Reset session to match with behavior for other peer
 		 * configs that require the session to be re-setup.
 		 */
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status)) {
-			peer->last_reset = PEER_DOWN_CAPABILITY_CHANGE;
+		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
 			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
 					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
-		} else
-			bgp_session_reset(peer);
+		else
+			bgp_session_reset_safe(peer, &nnode);
 	}
 }
 
@@ -2967,14 +2969,15 @@ unsigned int bgp_peer_gr_action(struct peer *peer, enum peer_mode old_state,
 	bgp_peer_move_to_gr_mode(peer, new_state);
 
 	if (session_reset) {
+		peer->last_reset = PEER_DOWN_CAPABILITY_CHANGE;
+
 		/* Reset session to match with behavior for other peer
 		 * configs that require the session to be re-setup.
 		 */
-		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status)) {
-			peer->last_reset = PEER_DOWN_CAPABILITY_CHANGE;
+		if (BGP_IS_VALID_STATE_FOR_NOTIF(peer->connection->status))
 			bgp_notify_send(peer->connection, BGP_NOTIFY_CEASE,
 					BGP_NOTIFY_CEASE_CONFIG_CHANGE);
-		} else
+		else
 			bgp_session_reset(peer);
 	}
 

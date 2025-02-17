@@ -30,11 +30,11 @@
 #define MAXNAMELEN 32
 #endif
 
-#define BPC_DEF_DETECTMULTIPLIER 3
-#define BPC_DEF_RECEIVEINTERVAL 300  /* milliseconds */
-#define BPC_DEF_TRANSMITINTERVAL 300 /* milliseconds */
-#define BPC_DEF_ECHORECEIVEINTERVAL 50 /* milliseconds */
-#define BPC_DEF_ECHOTRANSMITINTERVAL 50 /* milliseconds */
+#define BPC_DEF_DETECTMULTIPLIER     3
+#define BPC_DEF_RECEIVEINTERVAL	     300 /* milliseconds */
+#define BPC_DEF_TRANSMITINTERVAL     300 /* milliseconds */
+#define BPC_DEF_ECHORECEIVEINTERVAL  50	 /* milliseconds */
+#define BPC_DEF_ECHOTRANSMITINTERVAL 50	 /* milliseconds */
 
 DECLARE_MGROUP(BFDD);
 DECLARE_MTYPE(BFDD_CLIENT);

@@ -489,9 +489,7 @@ struct bgp {
 	uint32_t restarted_peers;
 	uint32_t implicit_eors;
 	uint32_t explicit_eors;
-#define BGP_UPDATE_DELAY_DEF              0
-#define BGP_UPDATE_DELAY_MIN              0
-#define BGP_UPDATE_DELAY_MAX              3600
+#define BGP_UPDATE_DELAY_DEFAULT 0
 
 	/* Reference bandwidth for BGP link-bandwidth. Used when
 	 * the LB value has to be computed based on some other
@@ -1819,6 +1817,7 @@ struct peer {
 #define PEER_DOWN_SOCKET_ERROR          34U /* Some socket error happened */
 #define PEER_DOWN_RTT_SHUTDOWN          35U /* Automatically shutdown due to RTT */
 #define PEER_DOWN_SUPPRESS_FIB_PENDING	 36U /* Suppress fib pending changed */
+#define PEER_DOWN_PASSWORD_CHANGE	 37U /* neighbor password command */
 	/*
 	 * Remember to update peer_down_str in bgp_fsm.c when you add
 	 * a new value to the last_reset reason
@@ -2856,6 +2855,8 @@ extern bool bgp_path_attribute_treat_as_withdraw(struct peer *peer, char *buf,
 						 size_t size);
 
 extern void srv6_function_free(struct bgp_srv6_function *func);
+
+extern void bgp_session_reset_safe(struct peer *peer, struct listnode **nnode);
 
 #ifdef _FRR_ATTRIBUTE_PRINTFRR
 /* clang-format off */

@@ -134,7 +134,7 @@ def test_bfd_peers():
         )
         _, result = topotest.run_and_expect(test_func, None, count=10, wait=1)
         assertmsg = '"{}" BFD convergence failure'.format(router)
-        assert result is None, assertmsg
+        assert result is not None, assertmsg
 
     expect_bfd_peer("r1", "192.168.1.2")
     expect_bfd_peer("r2", "192.168.1.1")

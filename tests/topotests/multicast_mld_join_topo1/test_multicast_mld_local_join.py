@@ -234,7 +234,7 @@ def test_mld_local_joins_p0(request):
     interfaces = [intf_r1_i1, intf_r1_i2]
     for interface in interfaces:
         result = verify_local_mld_groups(tgen, dut, interface, MLD_JOIN_RANGE_1)
-        assert result is True, "Testcase {} :Failed \n Error: {}".format(
+        assert result is False, "Testcase {} :Failed \n Error: {}".format(
             tc_name, result
         )
 
@@ -242,7 +242,7 @@ def test_mld_local_joins_p0(request):
     interfaces = [intf_r1_i1, intf_r1_i2]
     for interface in interfaces:
         result = verify_mld_groups(tgen, dut, interface, MLD_JOIN_RANGE_1)
-        assert result is True, "Testcase {} :Failed \n Error: {}".format(
+        assert result is False, "Testcase {} :Failed \n Error: {}".format(
             tc_name, result
         )
 

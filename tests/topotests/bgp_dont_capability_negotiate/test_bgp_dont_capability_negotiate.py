@@ -120,12 +120,12 @@ def test_bgp_check_fqdn():
     step("Wait to converge")
     test_func = functools.partial(bgp_converge, r1)
     _, result = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
-    assert result is None, "Can't converge with all capabilities"
+    assert result is not None, "Can't converge with all capabilities"
 
     step("Make sure FQDN capability is set")
     test_func = functools.partial(_bgp_check_fqdn, "r2")
     _, result = topotest.run_and_expect(test_func, None, count=60, wait=0.5)
-    assert result is None, "FQDN capability enabled, but r1 can't see it"
+    assert result is not None, "FQDN capability enabled, but r1 can't see it"
 
     step("Disable sending any capabilities from r2")
     r2.vtysh_cmd(

@@ -75,7 +75,7 @@ static struct isis_redist *isis_redist_lookup(struct isis_area *area,
 							       [level - 1],
 					  node, red))
 			if (red->table == table)
-				return red;
+				return NULL;
 	}
 	return NULL;
 }
